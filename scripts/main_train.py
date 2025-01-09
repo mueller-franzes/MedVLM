@@ -24,9 +24,10 @@ if __name__ == "__main__":
 
     #------------ Settings/Defaults ----------------
     current_time = datetime.now().strftime("%Y_%m_%d_%H%M%S")
-    # path_run_root = Path('/hpcwork/p0020933')
-    path_run_root = Path('/work/gm511073')
-    path_run_dir = path_run_root / Path('workspace_gustav/models/medvlm') / 'runs' / args.dataset / f'{args.model}_{current_time}'
+    # path_run_root = Path('/hpcwork/p0020933/workspace_gustav/models/medvlm')
+    # path_run_root = Path('/work/gm511073/workspace_gustav/models/medvlm')
+    path_run_root = Path.cwd()
+    path_run_dir = path_run_root / 'runs' / args.dataset / f'{args.model}_{current_time}'
     path_run_dir.mkdir(parents=True, exist_ok=True)
     accelerator = 'gpu' # if torch.cuda.is_available() else 'cpu'
     torch.set_float32_matmul_precision('high')
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     ds_val = CTRATE_Dataset3D(split='val', tokenizer=tokenizer)
     
     samples = len(ds_train) + len(ds_val)
-    batch_size = 2 #1 if args.dataset == 'CTRATE' else 2
+    batch_size = 1 #1 if args.dataset == 'CTRATE' else 2
     accumulate_grad_batches = 1 #2 if args.dataset == 'CTRATE' else 1
     steps_per_epoch = samples / batch_size / accumulate_grad_batches
 

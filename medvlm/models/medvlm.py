@@ -27,7 +27,8 @@ class MedVLM(BasicVLM):
             norm=nn.LayerNorm(emb_ch)
         )
 
-        self.linear = nn.Linear(emb_ch, vocab_size)
+        # self.linear = nn.Linear(emb_ch, vocab_size, bias=False)
+        # self.linear.weight = self.text_emb.weight 
 
     
     def forward(self, img, text=None, src_key_padding_mask=None):
@@ -39,7 +40,8 @@ class MedVLM(BasicVLM):
         output = self.decoder(text_emb, memory, 
                               memory_key_padding_mask =src_key_padding_mask, 
                               tgt_is_causal=True, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
-        output = self.linear(output)
+        # output = self.linear(output)
+        output = output @ self.text_emb.weight.t()
         return output 
 
          

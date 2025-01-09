@@ -150,12 +150,12 @@ class BasicVLM(BasicModel):
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
-        pred_tokens = self.logits2tokens(logits) 
+        # pred_tokens = self.logits2tokens(logits) 
         with torch.no_grad():
-            num_tokens_y = y.size(1)
-            mask_padding_y = y == self.tokenizer_y.pad_token_id
-            pred_tokens_y = pred_tokens[:, -num_tokens_y:] 
-            logging_dict["acc"] = torch.sum(pred_tokens_y[~mask_padding_y] == y[~mask_padding_y])/torch.numel(y[~mask_padding_y])
+            # num_tokens_y = y.size(1)
+            # mask_padding_y = y == self.tokenizer_y.pad_token_id
+            # pred_tokens_y = pred_tokens[:, -num_tokens_y:] 
+            # logging_dict["acc"] = torch.sum(pred_tokens_y[~mask_padding_y] == y[~mask_padding_y])/torch.numel(y[~mask_padding_y])
   
             # ----------------- Log Scalars ----------------------
             for metric_name, metric_val in logging_dict.items():

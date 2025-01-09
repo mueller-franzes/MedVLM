@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn 
 import torchvision.models as models
 from einops import rearrange
+from torch.utils.checkpoint import checkpoint
 
 def _get_resnet_torch(model):
     return {
@@ -63,7 +64,8 @@ class MST(nn.Module):
         x = x[:, None]
         x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
-        x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+        # x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+        x = checkpoint(self.backbone, x)
         x = rearrange(x, '(b d) e -> b d e', b=B)
 
         if self.slice_fusion_type == 'none':

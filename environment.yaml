@@ -24,4 +24,5 @@ dependencies:
     - torchio==0.19.9
     - wandb==0.17.9
     - boto3==1.35.94
+    - transformers==4.47.1
     - -e .
