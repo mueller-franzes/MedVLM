@@ -29,6 +29,7 @@ class MST(nn.Module):
             self.backbone.fc = nn.Identity()
         elif backbone_type == "dinov2":
             self.backbone = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_size}14')
+            self.backbone.mask_token = None  # Remove - otherweise unused parameters error"
             emb_ch = self.backbone.num_features
 
         self.emb_ch = emb_ch 
@@ -64,8 +65,10 @@ class MST(nn.Module):
         x = x[:, None]
         x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
-        # x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
-        x = checkpoint(self.backbone, x)
+        if self.training:
+            x = checkpoint(self.backbone, x)
+        else:
+            x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
         x = rearrange(x, '(b d) e -> b d e', b=B)
 
         if self.slice_fusion_type == 'none':
