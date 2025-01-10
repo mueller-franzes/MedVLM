@@ -9,7 +9,7 @@ import torch.nn as nn
 from .augmentations.augmentations_3d import ImageOrSubjectToTensor, ZNormalization, CropOrPad
 
 class UKA_Dataset3D(data.Dataset):
-    PATH_ROOT = Path('/home/gustav/Documents/datasets/ODELIA/UKA_all')
+    PATH_ROOT = Path.home()/'Documents/datasets/ODELIA/UKA_all'
     LABEL = 'Karzinom' # Fibroadenom Adenose Lympfknoten Zyste Fettgewebsnekrose Hyperplasie Duktektasie Papillom Hamartom Radiäre Narbe Duktales Karzinom in situ (DCIS) Karzinom
 
     def __init__(
@@ -23,13 +23,11 @@ class UKA_Dataset3D(data.Dataset):
             random_center=False,
             random_rotate=False,
             random_inverse=False,
-            noise=False, 
+            random_noise=False, 
             to_tensor = True,
-            return_labels = False,
             tokenizer = None,
         ):
         self.path_root = Path(self.PATH_ROOT if path_root is None else path_root)
-        self.return_labels = return_labels
         self.tokenizer = tokenizer 
         self.split = split
         
@@ -37,7 +35,7 @@ class UKA_Dataset3D(data.Dataset):
         if transform is None: 
             self.transform = tio.Compose([
                 tio.Flip((1,0)), # Just for viewing, otherwise upside down
-                CropOrPad((224, 224, 32), random_center=random_center, padding_mode='minimum'), 
+                CropOrPad((224, 224, 32), random_center=random_center, padding_mode='minimum'), # WANRING: Padding mode also for LabelMap
 
                 ZNormalization(per_channel=True, per_slice=False, masking_method=lambda x:(x>x.min()) & (x<x.max()), percentiles=(0.5, 99.5)), 
 
@@ -45,7 +43,7 @@ class UKA_Dataset3D(data.Dataset):
                 tio.RandomAffine(scales=0, degrees=(0, 0, 0, 0, 0,90), translation=0, isotropic=True, default_pad_value='minimum') if random_rotate else tio.Lambda(lambda x: x),
                 tio.RandomFlip((0,1,2)) if random_flip else tio.Lambda(lambda x: x), # WARNING: Padding mask 
                 tio.Lambda(lambda x:-x if torch.rand((1,),)[0]<0.5 else x, types_to_apply=[tio.INTENSITY]) if random_inverse else tio.Lambda(lambda x: x),
-                tio.RandomNoise(std=(0.0, 0.25)) if noise else tio.Lambda(lambda x: x),
+                tio.RandomNoise(std=(0.0, 0.25)) if random_noise else tio.Lambda(lambda x: x),
 
                 ImageOrSubjectToTensor() if to_tensor else tio.Lambda(lambda x: x)             
             ])
