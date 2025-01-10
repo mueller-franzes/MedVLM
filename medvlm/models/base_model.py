@@ -120,7 +120,7 @@ class BasicVLM(BasicModel):
         self, 
         tokenizer_y,
         optimizer = torch.optim.AdamW,
-        optimizer_kwargs ={'lr':5e-6},
+        optimizer_kwargs ={'lr':5e-4},
         lr_scheduler= None, 
         lr_scheduler_kwargs={},
         save_hyperparameters=True
@@ -168,8 +168,8 @@ class BasicVLM(BasicModel):
 
 
     @torch.no_grad()
-    def generate(self, x=None, y=None, return_logits=False, **kwargs):
-        pred_tokens, logits = self._generate(x=x, y=y, **kwargs)
+    def generate(self, x=None, y=None, x_pad_mask = None, return_logits=False, **kwargs):
+        pred_tokens, logits = self._generate(x=x, y=y, x_pad_mask=x_pad_mask, **kwargs)
         pred = self.tokenizer_y.decode(pred_tokens)
         if return_logits:
             return pred, logits
@@ -177,7 +177,7 @@ class BasicVLM(BasicModel):
     
 
     @torch.no_grad()
-    def _generate(self, x=None, y=None, max_new_tokens=None, batch_size=1, **kwargs):
+    def _generate(self, x=None, y=None, x_pad_mask=None, max_new_tokens=None, batch_size=1, **kwargs):
         max_new_tokens = self.tokenizer_y.max_length if max_new_tokens is None else max_new_tokens 
         bos_token_id = self.tokenizer_y.bos_token_id
         eos_token_id = self.tokenizer_y.eos_token_id
@@ -188,7 +188,7 @@ class BasicVLM(BasicModel):
 
         n=0
         while True:
-            logits = self.forward(img=x, text=tokens) # TODO add src_key_padding_mask
+            logits = self.forward(img=x, text=tokens, src_key_padding_mask=x_pad_mask) # TODO add src_key_padding_mask
             logits = logits[:, -1:] # [B, N, C] -> [B, 1, C]
             next_token = self.logits2tokens(logits, **kwargs)
             tokens = torch.cat((tokens, next_token), dim=1)
@@ -201,7 +201,7 @@ class BasicVLM(BasicModel):
         # tokens = tokens[:, 1:] # Maybe remove SOS or x 
         return tokens, logits_seq 
     
-    def logits2tokens(self, logits, top_k=1, temperature=1.0, **kwargs):
+    def logits2tokens(self, logits, top_k=1, temperature=1.0):
         # return torch.argmax(logits, dim=-1)
         # TODO Something is wrong with this function 
         # logits: [B, N, C] 
