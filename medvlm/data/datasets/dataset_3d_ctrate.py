@@ -65,7 +65,7 @@ class CTRATE_Dataset3D(data.Dataset):
                 tio.Resize(image_resize) if image_resize is not None else tio.Lambda(lambda x: x),
                 tio.Resample(resample) if resample is not None else tio.Lambda(lambda x: x),
                 #tio.Lambda(lambda x: x.moveaxis(1, 2)), # Just for viewing, otherwise upside down
-                CropOrPad(image_crop, random_center=random_center, mask_name='mask', padding_mode=-1000) if image_crop is not None else tio.Lambda(lambda x: x),
+                CropOrPad(image_crop, random_center=random_center, mask_name='mask', padding_mode=-1000) if image_crop is not None else tio.Lambda(lambda x: x), # WARNING: Padding value also used for mask 
 
                 tio.Clamp(*clamp),
                 RescaleIntensity((-1,1), in_min_max=clamp, per_channel=True),
@@ -147,7 +147,9 @@ class CTRATE_Dataset3D(data.Dataset):
 
         img = subject['img']
         mask = subject['mask']
+        mask[mask<0]=0 # workaround padding -1000
         src_key_padding_mask = ~(mask[0].sum(-1).sum(-1)>0)
+        # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
         label = item[self.LABEL]
         text = item['Report']
 
