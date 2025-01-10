@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
+from transformers import Dinov2Config, Dinov2Model
 
 def _get_resnet_torch(model):
     return {
@@ -16,7 +17,7 @@ class MST(nn.Module):
         out_ch=1, 
         backbone_type="dinov2",
         model_size = "s", # 34, 50, ... or 's', 'b', 'l'
-        slice_fusion_type = "transformer", # transformer, linear, average 
+        slice_fusion_type = "none", # transformer, linear, average 
     ):
         super().__init__()
         self.backbone_type = backbone_type
@@ -30,13 +31,18 @@ class MST(nn.Module):
         elif backbone_type == "dinov2":
             self.backbone = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_size}14')
             emb_ch = self.backbone.num_features
+        elif backbone_type == "dinov2-scratch":
+            configuration = Dinov2Config()
+            self.backbone = Dinov2Model(configuration)
+            emb_ch = configuration.hidden_size
+
 
         self.emb_ch = emb_ch 
         if slice_fusion_type == "transformer":
             self.slice_fusion = nn.TransformerEncoder(
                 encoder_layer=nn.TransformerEncoderLayer(
                     d_model=emb_ch,
-                    nhead=12, 
+                    nhead=12 if emb_ch%12 == 0 else 8, 
                     dim_feedforward=1*emb_ch,
                     dropout=0.0,
                     batch_first=True,
@@ -66,6 +72,8 @@ class MST(nn.Module):
 
         # x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
         x = checkpoint(self.backbone, x)
+        if self.backbone_type == "dinov2-scratch":
+            x = x.pooler_output
         x = rearrange(x, '(b d) e -> b d e', b=B)
 
         if self.slice_fusion_type == 'none':
