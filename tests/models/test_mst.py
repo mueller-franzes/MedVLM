@@ -7,8 +7,8 @@ input = torch.randn((1, 1, 32, 224, 224))
 device=torch.device('cuda')
 
 model = MST(
-    backbone_type="dinov2",
-    slice_fusion_type='transformer',
+    # backbone_type="dinov2",
+    # slice_fusion_type='transformer',
 )
 
 model.to(device)
