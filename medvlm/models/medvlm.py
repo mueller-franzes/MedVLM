@@ -13,11 +13,12 @@ class MedVLM(BasicVLM):
 
 
         self.text_emb = nn.Embedding(vocab_size, emb_ch)
+        nn.init.normal_(self.text_emb.weight, std=0.02)
 
         self.decoder = nn.TransformerDecoder(
             decoder_layer=nn.TransformerDecoderLayer(
                 d_model=emb_ch,
-                nhead=12, 
+                nhead=12 if emb_ch%12 == 0 else 8, 
                 dim_feedforward=1*emb_ch,
                 dropout=0.0,
                 batch_first=True,
