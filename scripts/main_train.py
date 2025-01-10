@@ -68,8 +68,8 @@ if __name__ == "__main__":
 
     
     # -------------- Training Initialization ---------------
-    to_monitor = "val/AUC_ROC"
-    min_max = "max"
+    to_monitor = "val/loss"
+    min_max = "min"
     log_every_n_steps = 50
     logger = WandbLogger(project=f'MedVLM', name=f'{args.model}_{current_time}', log_model=False)
     lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -90,8 +90,9 @@ if __name__ == "__main__":
         accelerator=accelerator,
         accumulate_grad_batches=accumulate_grad_batches,
         precision='16-mixed',
+        # gradient_clip_val =0.5,
         default_root_dir=str(path_run_dir),
-        callbacks=[checkpointing, lr_monitor, early_stopping],
+        callbacks=[checkpointing, lr_monitor], # early_stopping
         enable_checkpointing=True,
         check_val_every_n_epoch=1,
         log_every_n_steps=log_every_n_steps,

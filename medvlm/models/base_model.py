@@ -120,7 +120,7 @@ class BasicVLM(BasicModel):
         self, 
         tokenizer_y,
         optimizer = torch.optim.AdamW,
-        optimizer_kwargs ={'lr':1e-6},
+        optimizer_kwargs ={'lr':5e-6},
         lr_scheduler= None, 
         lr_scheduler_kwargs={},
         save_hyperparameters=True
@@ -169,7 +169,8 @@ class BasicVLM(BasicModel):
 
     @torch.no_grad()
     def generate(self, x=None, y=None, return_logits=False, **kwargs):
-        pred, logits = self._generate(x=x, y=y, **kwargs)
+        pred_tokens, logits = self._generate(x=x, y=y, **kwargs)
+        pred = self.tokenizer_y.decode(pred_tokens)
         if return_logits:
             return pred, logits
         return pred
@@ -187,14 +188,15 @@ class BasicVLM(BasicModel):
 
         n=0
         while True:
-            n = n+1
-            logits = self.forward(x=x, y=tokens, **kwargs) # TODO add src_key_padding_mask
+            logits = self.forward(img=x, text=tokens) # TODO add src_key_padding_mask
             logits = logits[:, -1:] # [B, N, C] -> [B, 1, C]
             next_token = self.logits2tokens(logits, **kwargs)
             tokens = torch.cat((tokens, next_token), dim=1)
             logits_seq = torch.cat((logits_seq, logits), dim=1) if n > 0  else logits
+            n = n+1
             if (next_token == eos_token_id) or n>=max_new_tokens :
                 break 
+            
     
         # tokens = tokens[:, 1:] # Maybe remove SOS or x 
         return tokens, logits_seq 
