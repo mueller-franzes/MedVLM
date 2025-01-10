@@ -10,15 +10,21 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 
 from medvlm.models.tokenizer import Tokenizer
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
+from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 from medvlm.data.datamodule import DataModule
 from medvlm.models.medvlm import MedVLM
 
-
-
+def get_dataset(name):
+    if name == 'CTRATE':
+        return CTRATE_Dataset3D
+    elif name == 'UKA':
+        return UKA_Dataset3D
+    else:
+        raise ValueError(f"Unknown dataset: {name}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default="CTRATE")
+    parser.add_argument('--dataset', type=str, default="UKA")
     parser.add_argument('--model', type=str, default="MedVLM")
     args = parser.parse_args()
 
@@ -34,11 +40,11 @@ if __name__ == "__main__":
 
     # ------------ Load Data ----------------
     tokenizer = Tokenizer()
-    ds_train = CTRATE_Dataset3D(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
-    ds_val = CTRATE_Dataset3D(split='val', tokenizer=tokenizer)
+    ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
+    ds_val = get_dataset(args.dataset)(split='val', tokenizer=tokenizer)
     
     samples = len(ds_train) + len(ds_val)
-    batch_size = 1 #1 if args.dataset == 'CTRATE' else 2
+    batch_size = 2 #1 if args.dataset == 'CTRATE' else 2
     accumulate_grad_batches = 1 #2 if args.dataset == 'CTRATE' else 1
     steps_per_epoch = samples / batch_size / accumulate_grad_batches
 
