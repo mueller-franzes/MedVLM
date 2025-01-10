@@ -43,3 +43,6 @@ class Tokenizer:
         padded_tokens.extend([self.tokenizer.pad_token_id] * padding_length)  # Add padding tokens
 
         return torch.tensor(padded_tokens)
+    
+    def decode(self, tokens):
+        return [self.tokenizer.decode(token_batch) for token_batch in tokens] # Must be a list - strings have different length 
