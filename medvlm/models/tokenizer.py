@@ -45,4 +45,4 @@ class Tokenizer:
         return torch.tensor(padded_tokens)
     
     def decode(self, tokens):
-        return [self.tokenizer.decode(token_batch) for token_batch in tokens] # Must be a list - strings have different length 
+        return [self.tokenizer.decode(token_batch, skip_special_tokens=True) for token_batch in tokens] # Must be a list - strings have different length 
