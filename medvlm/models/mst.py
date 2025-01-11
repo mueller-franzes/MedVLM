@@ -14,14 +14,17 @@ def _get_resnet_torch(model):
 class MST(nn.Module):
     def __init__(
         self, 
-        out_ch=1, 
+        out_ch=1, # no effect if return_last_hidden_layer=True
         backbone_type="dinov2",
         model_size = "s", # 34, 50, ... or 's', 'b', 'l'
-        slice_fusion_type = "none", # transformer, linear, average 
+        slice_fusion_type = "transformer", # transformer, linear, average, none 
+        num_slices=32, # only relevant for slice_fusion_type=linear
+        return_last_hidden_layer = True
     ):
         super().__init__()
         self.backbone_type = backbone_type
         self.slice_fusion_type = slice_fusion_type
+        self.return_last_hidden_layer = return_last_hidden_layer
 
         if backbone_type == "resnet":
             Model = _get_resnet_torch(model_size)
@@ -54,13 +57,15 @@ class MST(nn.Module):
             )
             self.cls_token = nn.Parameter(torch.randn(1, 1, emb_ch))
         elif slice_fusion_type == 'linear':
-            emb_ch = emb_ch*32
+            self.slice_fusion = nn.Linear(num_slices, 1)
         elif slice_fusion_type == 'average':
             pass 
         elif slice_fusion_type == "none":
             pass 
+        else:
+            raise ValueError("Unknown slice_fusion_type")
 
-        if  slice_fusion_type != "none":
+        if  not return_last_hidden_layer:
             self.linear = nn.Linear(emb_ch, out_ch)
 
 
@@ -71,6 +76,8 @@ class MST(nn.Module):
         x = x[:, None]
         x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
+        # x = rearrange(x, 'b c d h w -> (b d) c h w')
+
         if self.training:
             x = checkpoint(self.backbone, x)
         else:
@@ -78,23 +85,28 @@ class MST(nn.Module):
 
         if self.backbone_type == "dinov2-scratch":
             x = x.pooler_output
-            
+
         x = rearrange(x, '(b d) e -> b d e', b=B)
 
         if self.slice_fusion_type == 'none':
             return x
         elif self.slice_fusion_type == 'transformer':
-            x = torch.concat([self.cls_token.repeat(B, 1, 1), x], dim=1)
+            x = torch.concat([self.cls_token.repeat(B, 1, 1), x], dim=1) # [B, 1+D, E]
             if src_key_padding_mask is not None: 
-                src_key_padding_mask_cls = torch.zeros((B, 1), device=self.device, dtype=bool)
-                src_key_padding_mask = torch.concat([src_key_padding_mask_cls, src_key_padding_mask], dim=1)# [Batch, L]
-            x = self.slice_fusion(x, src_key_padding_mask=src_key_padding_mask)
-            x = x[:, 0]
+                src_key_padding_mask_cls = torch.zeros((B, 1), device=src_key_padding_mask.device, dtype=bool)
+                src_key_padding_mask = torch.concat([src_key_padding_mask_cls, src_key_padding_mask], dim=1)
+            x = self.slice_fusion(x, src_key_padding_mask=src_key_padding_mask) # [B, 1+D, L]
         elif self.slice_fusion_type == 'linear':
-            x = rearrange(x, 'b d e -> b (d e)')
+            x = rearrange(x, 'b d e -> b e d')
+            x = self.slice_fusion(x) # ->  [B, E, 1]
+            x = rearrange(x, 'b e d -> b d e') #  ->  [B, 1, E]
         elif self.slice_fusion_type == 'average':
-            x = x.mean(dim=1, keepdim=False) #  [B, D, E] ->  [B, E]
+            x = x.mean(dim=1, keepdim=True) #  [B, D, E] ->  [B, 1, E]
 
-        x = self.linear(x)
 
+
+        if self.return_last_hidden_layer:
+            return x 
+        
+        x = self.linear(x[:, 0])
         return x

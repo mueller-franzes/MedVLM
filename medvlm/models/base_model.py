@@ -146,7 +146,11 @@ class BasicVLM(BasicModel):
         # ------------------------- Compute Loss ---------------------------
         y = y[:, 1:] # Remove <SOS> 
         y_pred = logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
-        loss = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
+        ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
+        cs = F.cosine_similarity(self.memory_cls, self.tgt_cls, dim=1).mean()
+        loss = ce+1-cs 
+        logging_dict['ce'] = ce
+        logging_dict['cs'] = cs
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
