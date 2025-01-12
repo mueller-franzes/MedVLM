@@ -7,6 +7,7 @@ from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.strategies import DDPStrategy
 
 from medvlm.models.tokenizer import Tokenizer
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
@@ -59,19 +60,20 @@ if __name__ == "__main__":
         batch_size=batch_size, 
         pin_memory=True,
         # weights=weights,
-        num_workers=16,
-        num_train_samples=min(len(ds_train), 2000)
+        num_workers=24,
+        num_train_samples=min(len(ds_train), 2000) # WARNING: Ignored for DDP 
     )
 
     # ------------ Initialize Model ------------
     model = MedVLM(tokenizer_y=tokenizer)
+    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_01_11_110905/epoch=7-step=29496.ckpt')
 
     
     # -------------- Training Initialization ---------------
     to_monitor = "val/loss"
     min_max = "min"
     log_every_n_steps = 50
-    logger = WandbLogger(project=f'MedVLM', name=f'{args.model}_{current_time}', log_model=False)
+    logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=f'{args.model}_{args.dataset}_{current_time}', log_model=False)
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping = EarlyStopping(
         monitor=to_monitor,
@@ -91,6 +93,8 @@ if __name__ == "__main__":
         accumulate_grad_batches=accumulate_grad_batches,
         precision='16-mixed',
         # gradient_clip_val =0.5,
+        # replace_sampler_ddp=True, # WARNING: For DDP: Random DDP Sample is used unless set True here 
+        # strategy=DDPStrategy(static_graph=True), # static_graph=True required if gradient checkpoint is used  
         default_root_dir=str(path_run_dir),
         callbacks=[checkpointing, lr_monitor], # early_stopping
         enable_checkpointing=True,
