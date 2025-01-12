@@ -147,10 +147,23 @@ class BasicVLM(BasicModel):
         y = y[:, 1:] # Remove <SOS> 
         y_pred = logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
         ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
-        cs = F.cosine_similarity(self.memory_cls, self.tgt_cls, dim=1).mean()
-        loss = ce+1-cs 
+        # cs = F.cosine_similarity(self.memory_cls, self.tgt_cls, dim=1).mean()
+        # cs2 = F.cosine_similarity(self.memory_cls, self.tgt_cls.flip(0), dim=1).mean()
+        # mse = F.mse_loss(self.memory_cls, self.tgt_cls)
+        
+        memory_cls = F.normalize(self.memory_cls, dim=1)  # Normalize for cosine similarity
+        tgt_cls = F.normalize(self.tgt_cls, dim=1)     # Normalize for cosine similarity
+        logits = torch.mm(memory_cls, tgt_cls.t())  # Shape: [B, B]
+        # Labels: diagonal elements are the positive pairs
+        labels = torch.arange(logits.size(0), device=logits.device)  # Shape: [B]
+        # Cross-entropy loss
+        ce2 = F.cross_entropy(logits, labels)
+
+        loss = ce+ce2 #-cs+cs2
         logging_dict['ce'] = ce
-        logging_dict['cs'] = cs
+        # logging_dict['cs'] = cs
+        # logging_dict['cs2'] = cs2
+        logging_dict['ce2'] = ce2
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
@@ -227,3 +240,5 @@ class BasicVLM(BasicModel):
         # sample from the distribution
         token = torch.stack([torch.multinomial(probs_b, num_samples=1) for probs_b in probs]).squeeze(-1)
         return token # [B, N]
+
+
