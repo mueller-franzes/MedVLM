@@ -97,8 +97,8 @@ class MedVLM(BasicVLM):
         # self.linear = nn.Linear(emb_ch, vocab_size, bias=False)
         # self.linear.weight = self.text_emb.weight 
 
-        # self.linear_a = nn.Linear(emb_ch, emb_ch, bias=False)
-        # self.linear_b = nn.Linear(emb_ch, emb_ch, bias=False)
+        self.linear_a = nn.Linear(emb_ch, emb_ch, bias=False)
+        self.linear_b = nn.Linear(emb_ch, emb_ch, bias=False)
 
 
 
@@ -157,8 +157,10 @@ class MedVLM(BasicVLM):
         # logits = output @ self.text_emb.weight.t()
 
         # Woraround to avoid need to return 
-        self.memory_cls = memory_cls # self.linear_a()
-        self.tgt_cls = tgt_cls #self.linear_b()
+        # self.memory_cls = memory_cls
+        self.memory_cls = self.linear_a(memory_cls)
+        # self.tgt_cls = tgt_cls
+        self.tgt_cls = self.linear_b(tgt_cls)
 
         return logits 
 
