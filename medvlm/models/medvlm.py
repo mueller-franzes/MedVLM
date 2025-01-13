@@ -51,6 +51,7 @@ class MedVLM(BasicVLM):
     def __init__(self, tokenizer_y):
         super().__init__(tokenizer_y=tokenizer_y)
         vocab_size = tokenizer_y.vocab_size
+        max_length = tokenizer_y.max_length
 
         self.encoder = MST(slice_fusion_type='none')
         emb_ch = self.encoder.emb_ch 
@@ -58,6 +59,9 @@ class MedVLM(BasicVLM):
 
         self.text_emb = nn.Embedding(vocab_size, emb_ch)
         nn.init.normal_(self.text_emb.weight, std=0.02)
+
+        self.text_pos_emb = nn.Embedding(max_length, emb_ch)
+        nn.init.normal_(self.text_pos_emb.weight, std=0.02)
 
         # self.decoder = TransformerDecoder(
         #     decoder_layer=TransformerDecoderLayer(
@@ -104,7 +108,8 @@ class MedVLM(BasicVLM):
         memory = self.encoder(img, src_key_padding_mask=src_key_padding_mask)
         cls_img = self.cls_img.repeat(B, 1, 1)
         
-        text_emb = self.text_emb(text)
+        text_emb = self.text_emb(text) #[B, L] -> [B, L, E]
+        text_emb += self.text_pos_emb(torch.arange(text.size(1), device=text.device))
         cls_text = self.cls_text.repeat(B, 1, 1)
 
         text_padding_mask = text == self.tokenizer_y.pad_token_id
