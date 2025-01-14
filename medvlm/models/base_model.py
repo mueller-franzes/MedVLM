@@ -112,7 +112,43 @@ class BasicModel(VeryBasicModel):
         else:
             return [optimizer]
         
+class CLIPLossA(nn.Module):
+    # def forward(self, image_embeddings, text_embeddings, temperature=1):
+    #     # https://github.com/moein-shariatnia/OpenAI-CLIP
+    #     logits = (text_embeddings @ image_embeddings.T) / temperature
+    #     images_similarity = image_embeddings @ image_embeddings.T
+    #     texts_similarity = text_embeddings @ text_embeddings.T
+    #     targets = F.softmax(
+    #         (images_similarity + texts_similarity) / 2 * temperature, dim=-1
+    #     )
+    #     texts_loss = self.cross_entropy(logits, targets, reduction='none')
+    #     images_loss = self.cross_entropy(logits.T, targets.T, reduction='none')
+    #     loss =  (images_loss + texts_loss) / 2.0 # shape: (batch_size)
+    #     return loss.mean(), texts_loss.mean(), images_loss.mean()
+    
+    def forward(self, image_features, text_features, logit_scale=1, temperature=1):
+        # https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py
+        logits_per_image = logit_scale * image_features @ text_features.T
+        logits_per_text = logit_scale * text_features @ image_features.T
+    
+        device = logits_per_image.device
+        labels = torch.arange(logits_per_image.shape[0], device=device, dtype=torch.long)
 
+
+        images_loss = F.cross_entropy(logits_per_image, labels)
+        texts_loss = F.cross_entropy(logits_per_text, labels)
+        total_loss = (images_loss + texts_loss) / 2
+
+        return total_loss, texts_loss, images_loss
+
+
+    def cross_entropy(self, preds, targets, reduction='none'):
+        log_softmax = nn.LogSoftmax(dim=-1)
+        loss = (-targets * log_softmax(preds)).sum(1)
+        if reduction == "none":
+            return loss
+        elif reduction == "mean":
+            return loss.mean()
 
 
 class BasicVLM(BasicModel):
@@ -128,6 +164,7 @@ class BasicVLM(BasicModel):
         super().__init__(optimizer, optimizer_kwargs, lr_scheduler, lr_scheduler_kwargs, save_hyperparameters=save_hyperparameters)
 
         self.tokenizer_y = tokenizer_y
+        self.cliploss = CLIPLossA()
 
         # self.ce = nn.ModuleDict({state:CrossEntropy() for state in ["train_", "val_", "test_"]}) # 'train' not allowed as key
         # self.acc = nn.ModuleDict({state:Accuracy(task='multiclass', num_classes=3) for state in ["train_", "val_", "test_"]})
@@ -150,20 +187,37 @@ class BasicVLM(BasicModel):
         # cs = F.cosine_similarity(self.memory_cls, self.tgt_cls, dim=1).mean()
         # cs2 = F.cosine_similarity(self.memory_cls, self.tgt_cls.flip(0), dim=1).mean()
         # mse = F.mse_loss(self.memory_cls, self.tgt_cls)
+
+
+        image_embeddings = self.memory_cls
+        text_embeddings = self.tgt_cls
+        ce2, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings)
         
-        memory_cls = F.normalize(self.memory_cls, dim=1)  # Normalize for cosine similarity
-        tgt_cls = F.normalize(self.tgt_cls, dim=1)     # Normalize for cosine similarity
-        logits = torch.mm(memory_cls, tgt_cls.t())  # Shape: [B, B]
-        # Labels: diagonal elements are the positive pairs
-        labels = torch.arange(logits.size(0), device=logits.device)  # Shape: [B]
-        # Cross-entropy loss
-        ce2 = F.cross_entropy(logits, labels)
+        # image_embeddings = F.normalize(image_embeddings, dim=1)  # Normalize for cosine similarity
+        # text_embeddings = F.normalize(text_embeddings, dim=1)     # Normalize for cosine similarity
+        # logits = torch.mm(image_embeddings, text_embeddings.t())  # Shape: [B, B]
+
+        # # Intra similiarity 
+        # images_similarity = image_embeddings @ image_embeddings.T
+        # texts_similarity = text_embeddings @ text_embeddings.T
+
+        # # Labels
+        # # labels = torch.arange(logits.size(0), device=logits.device)  # Hard labels 
+        # labels = F.softmax((images_similarity + texts_similarity) / 2 , dim=-1) # Soft labels 
+
+        # # Cross-entropy loss
+        # # ce2 = F.cross_entropy(logits, labels)
+        # images_loss =  F.cross_entropy(logits, labels)
+        # texts_loss =  F.cross_entropy(logits.T, labels.T)
+        # ce2 = (texts_loss+images_loss)/2
 
         loss = ce+ce2 #-cs+cs2
         logging_dict['ce'] = ce
         # logging_dict['cs'] = cs
         # logging_dict['cs2'] = cs2
         logging_dict['ce2'] = ce2
+        logging_dict['image2text'] = images_loss
+        logging_dict['text2image'] = texts_loss
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
