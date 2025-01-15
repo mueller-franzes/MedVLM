@@ -104,6 +104,7 @@ class MedVLM(BasicVLM):
 
     
     def forward(self, img, text=None, src_key_padding_mask=None):
+        # src_key_padding_mask = torch.zeros_like(src_key_padding_mask).bool()
         B = img.size(0)
         memory = self.encoder(img, src_key_padding_mask=src_key_padding_mask)
         cls_img = self.cls_img.repeat(B, 1, 1)
@@ -135,8 +136,8 @@ class MedVLM(BasicVLM):
         #                                             tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
         
 
-        x = torch.cat([cls_img, memory, text_emb, cls_text], dim=1)
-        src_padding_mask = torch.cat([cls_padding_mask, src_key_padding_mask, text_padding_mask, cls_padding_mask], dim=1)
+        x = torch.cat([memory, cls_img, text_emb, cls_text], dim=1)
+        src_padding_mask = torch.cat([src_key_padding_mask, cls_padding_mask, text_padding_mask, cls_padding_mask], dim=1)
 
         tgt_size = x.size(1)
         src_mask = torch.triu(torch.ones(tgt_size, tgt_size, device=text.device), diagonal=1).bool()
@@ -147,7 +148,7 @@ class MedVLM(BasicVLM):
         output = self.decoder(x, mask=src_mask, src_key_padding_mask=src_padding_mask)
         
 
-        memory_cls = output[:, 0] 
+        memory_cls = output[:, msize+1] 
         tgt_cls = output[:, -1] 
         logits = output[:, msize+1:-1]
         logits =  logits@ self.text_emb.weight.t()
