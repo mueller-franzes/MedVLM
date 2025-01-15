@@ -129,7 +129,7 @@ class CLIPLossA(nn.Module):
     def forward(self, image_features, text_features, logit_scale=1, temperature=1):
         # https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py
         logits_per_image = logit_scale * image_features @ text_features.T
-        logits_per_text = logit_scale * text_features @ image_features.T
+        logits_per_text = logit_scale * text_features @ image_features.T # = logits_per_image.T
     
         device = logits_per_image.device
         labels = torch.arange(logits_per_image.shape[0], device=device, dtype=torch.long)
@@ -191,6 +191,8 @@ class BasicVLM(BasicModel):
 
         image_embeddings = self.memory_cls
         text_embeddings = self.tgt_cls
+        image_embeddings = F.normalize(image_embeddings, dim=-1)
+        text_embeddings = F.normalize(text_embeddings, dim=-1)
         ce2, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings)
         
         # image_embeddings = F.normalize(image_embeddings, dim=1)  # Normalize for cosine similarity
