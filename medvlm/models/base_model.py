@@ -9,6 +9,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 # from torchmetrics.image import LearnedPerceptualImagePatchSimilarity  
 from .utils.functions import tensor2image
 import wandb
+import math 
 
 class VeryBasicModel(pl.LightningModule):
     def __init__(self, save_hyperparameters=True):
@@ -113,6 +114,12 @@ class BasicModel(VeryBasicModel):
             return [optimizer]
         
 class CLIPLossA(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.temperature = nn.Parameter(torch.tensor([1.0]))
+        logit_scale = math.log(1 / 0.07)
+        self.logit_scale = nn.Parameter(logit_scale * torch.ones([])) 
+
     # def forward(self, image_embeddings, text_embeddings, temperature=1):
     #     # https://github.com/moein-shariatnia/OpenAI-CLIP
     #     logits = (text_embeddings @ image_embeddings.T) / temperature
@@ -126,17 +133,20 @@ class CLIPLossA(nn.Module):
     #     loss =  (images_loss + texts_loss) / 2.0 # shape: (batch_size)
     #     return loss.mean(), texts_loss.mean(), images_loss.mean()
     
-    def forward(self, image_features, text_features, logit_scale=1, temperature=1):
+    def forward(self, image_features, text_features):
         # https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py
-        logits_per_image = logit_scale * image_features @ text_features.T
-        logits_per_text = logit_scale * text_features @ image_features.T # = logits_per_image.T
+        # https://github.com/lucidrains/CoCa-pytorch/blob/edee92c74e311ccfa4a0024412fd991c98aff5fd/coca_pytorch/coca_pytorch.py#L507
+        self.logit_scale.data.clamp_(math.log(1), math.log(100))
+        temperature = torch.exp(self.logit_scale)
+
+        logits = temperature * image_features @ text_features.T
     
-        device = logits_per_image.device
-        labels = torch.arange(logits_per_image.shape[0], device=device, dtype=torch.long)
+        device = logits.device
+        labels = torch.arange(logits.shape[0], device=device, dtype=torch.long)
 
 
-        images_loss = F.cross_entropy(logits_per_image, labels)
-        texts_loss = F.cross_entropy(logits_per_text, labels)
+        images_loss = F.cross_entropy(logits, labels)
+        texts_loss = F.cross_entropy(logits.T, labels)
         total_loss = (images_loss + texts_loss) / 2
 
         return total_loss, texts_loss, images_loss
@@ -220,6 +230,7 @@ class BasicVLM(BasicModel):
         logging_dict['ce2'] = ce2
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
+        logging_dict['temperature'] = self.cliploss.logit_scale.exp()
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
