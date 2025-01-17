@@ -72,7 +72,7 @@ class MST(nn.Module):
     def forward(self, x, src_key_padding_mask=None, save_attn=False):
         B, *_ = x.shape
 
-        x = rearrange(x, 'b c d h w -> (b d c) h w')
+        x = rearrange(x, 'b c d h w -> (b c d) h w')
         x = x[:, None]
         x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
@@ -82,6 +82,7 @@ class MST(nn.Module):
             x = checkpoint(self.backbone, x)
         else:
             x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+        # self.backbone(x, is_training=True)['x_norm_patchtokens']
 
         if self.backbone_type == "dinov2-scratch":
             x = x.pooler_output
