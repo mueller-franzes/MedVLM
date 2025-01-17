@@ -4,48 +4,9 @@ from .mst import MST
 import torch 
 from typing import Optional
 from torch import Tensor
+# from transformers import AutoModel
 
 
-
-class TransformerDecoder(nn.TransformerDecoder):
-    # Add option to run foward pass without cross attention
-    def forward_wo_cross_att(self, tgt: Tensor, tgt_mask: Optional[Tensor] = None,
-                tgt_key_padding_mask: Optional[Tensor] = None,
-                tgt_is_causal: Optional[bool] = None) -> Tensor:
-        output = tgt
-
-        seq_len = nn.modules.transformer._get_seq_len(tgt, self.layers[0].self_attn.batch_first)
-        tgt_is_causal = nn.modules.transformer._detect_is_causal_mask(tgt_mask, tgt_is_causal, seq_len)
-
-        for mod in self.layers:
-            output = mod.forward_wo_cross_att(output, tgt_mask=tgt_mask,
-                         tgt_key_padding_mask=tgt_key_padding_mask,
-                         tgt_is_causal=tgt_is_causal)
-
-        if self.norm is not None:
-            output = self.norm(output)
-
-        return output
-
-class TransformerDecoderLayer(nn.TransformerDecoderLayer):
-    # Add option to run foward pass without cross attention
-    def forward_wo_cross_att(
-        self,
-        tgt: Tensor,
-        tgt_mask: Optional[Tensor] = None,
-        tgt_key_padding_mask: Optional[Tensor] = None,
-        tgt_is_causal: bool = False,
-    ) -> Tensor:
-        # forward without encoder 
-        x = tgt
-        if self.norm_first:
-            x = x + self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask, tgt_is_causal)
-            x = x + self._ff_block(self.norm3(x))
-        else:
-            x = self.norm1(x + self._sa_block(x, tgt_mask, tgt_key_padding_mask, tgt_is_causal))
-            x = self.norm3(x + self._ff_block(x))
-
-        return x
 
 class MedVLM(BasicVLM):
     def __init__(self, tokenizer_y):
@@ -54,14 +15,18 @@ class MedVLM(BasicVLM):
         max_length = tokenizer_y.max_length
 
         self.encoder = MST(slice_fusion_type='none')
+        for param in self.encoder.parameters():
+            param.requires_grad = False
         emb_ch = self.encoder.emb_ch 
 
 
         self.text_emb = nn.Embedding(vocab_size, emb_ch)
         nn.init.normal_(self.text_emb.weight, std=0.02)
-
         self.text_pos_emb = nn.Embedding(max_length, emb_ch)
-        nn.init.normal_(self.text_pos_emb.weight, std=0.02)
+
+        # model = AutoModel.from_pretrained("GerMedBERT/medbert-512")
+        # self.text_emb = model.embeddings.word_embeddings  # Embedding for tokenized words
+        # self.text_pos_emb  = model.embeddings.position_embeddings  # Embedding for positions
 
         # self.decoder = TransformerDecoder(
         #     decoder_layer=TransformerDecoderLayer(
@@ -115,25 +80,6 @@ class MedVLM(BasicVLM):
 
         text_padding_mask = text == self.tokenizer_y.pad_token_id
         cls_padding_mask = torch.zeros((B, 1), device=text.device, dtype=bool)
-
-        # text_emb = torch.concat([text_emb, cls_text], dim=1) # [B, L+1, E]
-        # tgt_size = text_emb.size(1)
-        # tgt_mask = torch.triu(torch.ones(tgt_size, tgt_size, device=text.device), diagonal=1).bool()
-        # tgt_key_padding_mask = text == self.tokenizer_y.pad_token_id
-        # tgt_key_padding_mask = torch.concat([tgt_key_padding_mask, torch.zeros((B, 1), device=text.device, dtype=bool)], dim=1)
-
-        # memory_mask = None 
-        # # memory_size = memory.size(1)-1 # without cls token 
-        # # memory_mask = torch.zeros(tgt_size, memory_size, device=memory.device).bool()
-        # # memory_mask[-1, :] = True # disable cross attention this way will result in NaN
-
-        # output = self.decoder(text_emb[:, :-1], memory[:, 1:], 
-        #                       memory_mask = memory_mask, memory_key_padding_mask =src_key_padding_mask, 
-        #                       tgt_mask=tgt_mask[:-1, :-1], tgt_key_padding_mask=tgt_key_padding_mask[:, :-1])
-    
-        # # Ugly workaround to avoid NaN 
-        # output2 = self.decoder.forward_wo_cross_att(text_emb, 
-        #                                             tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
         
 
         x = torch.cat([memory, cls_img, text_emb, cls_text], dim=1)
