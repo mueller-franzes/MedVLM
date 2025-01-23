@@ -51,8 +51,9 @@ class MST(nn.Module):
                     dropout=0.0,
                     batch_first=True,
                     norm_first=True,
+                    bias=False,
                 ),
-                num_layers=1,
+                num_layers=4,
                 norm=nn.LayerNorm(emb_ch)
             )
             self.cls_token = nn.Parameter(torch.randn(1, 1, emb_ch))
@@ -78,10 +79,11 @@ class MST(nn.Module):
 
         # x = rearrange(x, 'b c d h w -> (b d) c h w')
 
-        if self.training:
-            x = checkpoint(self.backbone, x)
-        else:
-            x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+        # if self.training:
+        #     x = checkpoint(self.backbone, x)
+        # else:
+        #     x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+        x = checkpoint(self.backbone, x)
         # self.backbone(x, is_training=True)['x_norm_patchtokens']
 
         if self.backbone_type == "dinov2-scratch":
@@ -92,10 +94,10 @@ class MST(nn.Module):
         if self.slice_fusion_type == 'none':
             return x
         elif self.slice_fusion_type == 'transformer':
-            x = torch.concat([self.cls_token.repeat(B, 1, 1), x], dim=1) # [B, 1+D, E]
+            x = torch.concat([x, self.cls_token.repeat(B, 1, 1)], dim=1) # [B, 1+D, E]
             if src_key_padding_mask is not None: 
                 src_key_padding_mask_cls = torch.zeros((B, 1), device=src_key_padding_mask.device, dtype=bool)
-                src_key_padding_mask = torch.concat([src_key_padding_mask_cls, src_key_padding_mask], dim=1)
+                src_key_padding_mask = torch.concat([src_key_padding_mask, src_key_padding_mask_cls], dim=1)
             x = self.slice_fusion(x, src_key_padding_mask=src_key_padding_mask) # [B, 1+D, L]
         elif self.slice_fusion_type == 'linear':
             x = rearrange(x, 'b d e -> b e d')
