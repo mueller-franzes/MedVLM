@@ -2,7 +2,7 @@ import torch
 
 from medvlm.models.mst import MST
 
-input = torch.randn((1, 1, 32, 224, 224))
+input = torch.randn((1, 3, 32, 224, 224))
 
 device=torch.device('cuda')
 
