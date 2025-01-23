@@ -194,9 +194,6 @@ class BasicVLM(BasicModel):
         y = y[:, 1:] # Remove <SOS> 
         y_pred = logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
         ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
-        # cs = F.cosine_similarity(self.memory_cls, self.tgt_cls, dim=1).mean()
-        # cs2 = F.cosine_similarity(self.memory_cls, self.tgt_cls.flip(0), dim=1).mean()
-        # mse = F.mse_loss(self.memory_cls, self.tgt_cls)
 
 
         image_embeddings = self.memory_cls
@@ -205,32 +202,14 @@ class BasicVLM(BasicModel):
         text_embeddings = F.normalize(text_embeddings, dim=-1)
         ce2, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings)
         
-        # image_embeddings = F.normalize(image_embeddings, dim=1)  # Normalize for cosine similarity
-        # text_embeddings = F.normalize(text_embeddings, dim=1)     # Normalize for cosine similarity
-        # logits = torch.mm(image_embeddings, text_embeddings.t())  # Shape: [B, B]
 
-        # # Intra similiarity 
-        # images_similarity = image_embeddings @ image_embeddings.T
-        # texts_similarity = text_embeddings @ text_embeddings.T
-
-        # # Labels
-        # # labels = torch.arange(logits.size(0), device=logits.device)  # Hard labels 
-        # labels = F.softmax((images_similarity + texts_similarity) / 2 , dim=-1) # Soft labels 
-
-        # # Cross-entropy loss
-        # # ce2 = F.cross_entropy(logits, labels)
-        # images_loss =  F.cross_entropy(logits, labels)
-        # texts_loss =  F.cross_entropy(logits.T, labels.T)
-        # ce2 = (texts_loss+images_loss)/2
-
-        loss = ce+ce2 #-cs+cs2
+        loss = ce+self.loss2#+ce2 #-cs+cs2
         logging_dict['ce'] = ce
-        # logging_dict['cs'] = cs
-        # logging_dict['cs2'] = cs2
         logging_dict['ce2'] = ce2
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
+        logging_dict['loss2'] = self.loss2
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
