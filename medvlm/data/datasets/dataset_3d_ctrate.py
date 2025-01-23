@@ -71,10 +71,10 @@ class CTRATE_Dataset3D(data.Dataset):
                 RescaleIntensity((-1,1), in_min_max=clamp, per_channel=True),
 
                 # tio.Lambda(lambda x: x.moveaxis(1, 2) if torch.rand((1,),)[0]<0.5 else x ) if random_rotate else tio.Lambda(lambda x: x), # WARNING: 1,2 if Subject, 2, 3 if tensor
-                tio.RandomAffine(scales=0, degrees=(0, 0, 0, 0, 0,90), translation=0, isotropic=True, default_pad_value='minimum') if random_rotate else tio.Lambda(lambda x: x),
-                tio.RandomFlip((0,1,2)) if random_flip else tio.Lambda(lambda x: x), # WARNING: Padding mask 
-                tio.Lambda(lambda x:-x if torch.rand((1,),)[0]<0.5 else x, types_to_apply=[tio.INTENSITY]) if random_inverse else tio.Lambda(lambda x: x),
-                tio.RandomNoise(std=(0, 0.1)) if random_noise else tio.Lambda(lambda x: x),
+                # tio.RandomAffine(scales=0, degrees=(0, 0, 0, 0, 0,90), translation=0, isotropic=True, default_pad_value='minimum') if random_rotate else tio.Lambda(lambda x: x),
+                # tio.RandomFlip((0,1,2)) if random_flip else tio.Lambda(lambda x: x), # WARNING: Padding mask 
+                # tio.Lambda(lambda x:-x if torch.rand((1,),)[0]<0.5 else x, types_to_apply=[tio.INTENSITY]) if random_inverse else tio.Lambda(lambda x: x),
+                # tio.RandomNoise(std=(0, 0.1)) if random_noise else tio.Lambda(lambda x: x),
 
                 ImageOrSubjectToTensor() if to_tensor else tio.Lambda(lambda x: x) 
             ])
