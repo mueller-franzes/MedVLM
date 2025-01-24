@@ -71,6 +71,14 @@ class MST(nn.Module):
 
 
     def forward(self, x, src_key_padding_mask=None, save_attn=False):
+        if save_attn:
+            # fastpath_enabled = torch.backends.mha.get_fastpath_enabled()
+            # torch.backends.mha.set_fastpath_enabled(False)
+            self.attention_maps_slice = []
+            self.attention_maps = []
+            self.hooks = []
+            self.register_hooks()
+    
         B, *_ = x.shape
 
         x = rearrange(x, 'b c d h w -> (b c d) h w')
@@ -107,9 +115,112 @@ class MST(nn.Module):
             x = x.mean(dim=1, keepdim=True) #  [B, D, E] ->  [B, 1, E]
 
 
+        if save_attn:
+            # torch.backends.mha.set_fastpath_enabled(fastpath_enabled)
+            self.deregister_hooks()
 
         if self.return_last_hidden_layer:
             return x 
         
         x = self.linear(x[:, 0])
         return x
+    
+
+    
+    def get_slice_attention(self):
+        attention_map_slice = self.attention_maps_slice[-1] # [B, Heads, 1+D(+regs), 1+D(+regs)]
+        attention_map_slice = attention_map_slice[:, :, 0, 1:] # [B, Heads, D]
+        attention_map_slice /= attention_map_slice.sum(dim=-1, keepdim=True)
+
+        # Average attention heads
+        attention_map_slice = attention_map_slice.mean(dim=1)  #  [B, Heads, D] -> [B, D]
+        attention_map_slice = attention_map_slice.view(-1) # [B*D]
+        attention_map_slice = attention_map_slice[:, None, None] # [B*D, 1, 1]
+        return attention_map_slice
+    
+    def get_plane_attention(self):
+        attention_map_dino = self.attention_maps[-1] # [B*D, Heads, 1+HW, 1+HW]
+        num_register_tokens = self.backbone.num_register_tokens  if self.use_registers else 0
+        img_slice = slice(num_register_tokens+1, None) 
+        attention_map_dino = attention_map_dino[:,:, 0, img_slice] # [B*D, Heads, HW]
+        attention_map_dino /= attention_map_dino.sum(dim=-1, keepdim=True)
+        return attention_map_dino
+
+    def get_attention_maps(self):
+        attention_map_dino = self.get_plane_attention()
+        attention_map_slice = self.get_slice_attention()
+        attention_map = attention_map_slice*attention_map_dino
+        return attention_map
+    
+    
+    def register_hooks(self):
+        # ------------------------- Backbone attention -----------------
+        def enable_attention_dino(mod):
+                forward_orig = mod.forward
+                def forward_wrap(self2, x):
+                    # forward_orig.__self__
+                    B, N, C = x.shape
+                    qkv = self2.qkv(x).reshape(B, N, 3, self2.num_heads, C // self2.num_heads).permute(2, 0, 3, 1, 4)
+                    
+                    q, k, v = qkv[0] * self2.scale, qkv[1], qkv[2]
+                    attn = q @ k.transpose(-2, -1)
+           
+                    attn = attn.softmax(dim=-1)
+                    attn = self2.attn_drop(attn)
+
+                    x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+                    x = self2.proj(x)
+                    x = self2.proj_drop(x)
+
+                    # Hook attention map 
+                    self.attention_maps.append(attn)
+
+                    return x
+                
+                mod.forward = lambda x: forward_wrap(mod, x)
+                mod.foward_orig = forward_orig
+
+        # Hook Dino Attention
+        for name, mod in self.backbone.named_modules():
+            if name.endswith('.attn'):
+                enable_attention_dino(mod)
+
+        # ------------------------- Slice fusion attention -----------------
+        if self.slice_fusion_type != 'transformer':
+            return 
+        
+        def enable_attention(module):
+            forward_orig = module.forward
+            def forward_wrap(*args, **kwargs):
+                kwargs["need_weights"] = True
+                kwargs["average_attn_weights"] = False
+                return forward_orig(*args, **kwargs)
+            module.forward = forward_wrap
+            module.foward_orig = forward_orig
+
+
+        def append_attention_maps(module, input, output):
+            self.attention_maps_slice.append(output[1])
+
+        for _, mod in self.slice_fusion.named_modules():
+            if isinstance(mod, nn.MultiheadAttention):
+                enable_attention(mod)
+                self.hooks.append(mod.register_forward_hook(append_attention_maps))
+
+
+    def deregister_hooks(self):
+        for handle in self.hooks:
+            handle.remove()
+
+        # ------------------------- Backbone attention -----------------
+        for name, mod in self.backbone.named_modules():
+            if name.endswith('.attn'):
+                mod.forward = mod.foward_orig
+    
+        # ------------------------- Slice fusion attention -----------------
+        if self.slice_fusion_type != 'transformer':
+            return 
+        
+        for _, mod in self.slice_fusion.named_modules():
+            if isinstance(mod, nn.MultiheadAttention):
+                mod.forward = mod.foward_orig
