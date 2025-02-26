@@ -7,7 +7,11 @@ import pytorch_lightning as pl
 from torchmetrics import MeanSquaredError, Accuracy, AUROC
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 # from torchmetrics.image import LearnedPerceptualImagePatchSimilarity  
-from .utils.functions import tensor2image
+from torchvision.utils import save_image
+from einops import rearrange
+import  torch.optim.lr_scheduler as lr_scheduler
+
+from .utils.functions import tensor2image, tensor_cam2image, minmax_norm, one_hot, tensor_mask2image
 import wandb
 import math 
 
@@ -92,7 +96,7 @@ class BasicModel(VeryBasicModel):
         self, 
         optimizer=torch.optim.Adam, 
         optimizer_kwargs={'lr':1e-3, 'weight_decay':1e-2},
-        lr_scheduler= None, 
+        lr_scheduler= None,
         lr_scheduler_kwargs={},
         save_hyperparameters=True
     ):
@@ -120,9 +124,12 @@ class CLIPLossA(nn.Module):
         logit_scale = math.log(1 / 0.07)
         self.logit_scale = nn.Parameter(logit_scale * torch.ones([])) 
 
-    # def forward(self, image_embeddings, text_embeddings, temperature=1):
+    # def forward(self, image_embeddings, text_embeddings):
+    #     self.logit_scale.data.clamp_(math.log(1), math.log(100))
+    #     temperature = torch.exp(self.logit_scale)
+    
     #     # https://github.com/moein-shariatnia/OpenAI-CLIP
-    #     logits = (text_embeddings @ image_embeddings.T) / temperature
+    #     logits = temperature * text_embeddings @ image_embeddings.T 
     #     images_similarity = image_embeddings @ image_embeddings.T
     #     texts_similarity = text_embeddings @ text_embeddings.T
     #     targets = F.softmax(
@@ -133,11 +140,11 @@ class CLIPLossA(nn.Module):
     #     loss =  (images_loss + texts_loss) / 2.0 # shape: (batch_size)
     #     return loss.mean(), texts_loss.mean(), images_loss.mean()
     
-    def forward(self, image_features, text_features):
+    def forward(self, image_features, text_features, temperature=None):
         # https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py
         # https://github.com/lucidrains/CoCa-pytorch/blob/edee92c74e311ccfa4a0024412fd991c98aff5fd/coca_pytorch/coca_pytorch.py#L507
         self.logit_scale.data.clamp_(math.log(1), math.log(100))
-        temperature = torch.exp(self.logit_scale)
+        temperature = torch.exp(self.logit_scale) if temperature is None else temperature
 
         logits = temperature * image_features @ text_features.T
     
@@ -167,11 +174,14 @@ class BasicVLM(BasicModel):
         tokenizer_y,
         optimizer = torch.optim.AdamW,
         optimizer_kwargs ={'lr':5e-4},
-        lr_scheduler= None, 
-        lr_scheduler_kwargs={},
+        lr_scheduler= lr_scheduler.LinearLR, 
+        lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':10000},
         save_hyperparameters=True
     ):
-        super().__init__(optimizer, optimizer_kwargs, lr_scheduler, lr_scheduler_kwargs, save_hyperparameters=save_hyperparameters)
+        super().__init__(optimizer, optimizer_kwargs, 
+                        #  lr_scheduler, 
+                        #  lr_scheduler_kwargs, 
+                         save_hyperparameters=save_hyperparameters)
 
         self.tokenizer_y = tokenizer_y
         self.cliploss = CLIPLossA()
@@ -191,25 +201,31 @@ class BasicVLM(BasicModel):
 
 
         # ------------------------- Compute Loss ---------------------------
+        ce = 0
         y = y[:, 1:] # Remove <SOS> 
         y_pred = logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
         ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
-
+       
 
         image_embeddings = self.memory_cls
         text_embeddings = self.tgt_cls
         image_embeddings = F.normalize(image_embeddings, dim=-1)
         text_embeddings = F.normalize(text_embeddings, dim=-1)
-        ce2, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings)
+        contrastive_loss, _, _ = self.cliploss(image_embeddings, text_embeddings)
+
+        # Compute contrastive loss without temperature scaling
+        with torch.no_grad():
+            contrastive_loss_fix, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings, temperature=1)
         
 
-        loss = ce+self.loss2#+ce2 #-cs+cs2
+        loss = ce+contrastive_loss#+self.loss2 #-cs+cs2 #self.loss2
         logging_dict['ce'] = ce
-        logging_dict['ce2'] = ce2
+        logging_dict['ce2'] = contrastive_loss
+        logging_dict['contastive_real'] = contrastive_loss_fix
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
-        logging_dict['loss2'] = self.loss2
+        # logging_dict['loss2'] = self.loss2
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
@@ -252,6 +268,17 @@ class BasicVLM(BasicModel):
         n=0
         while True:
             logits = self.forward(img=x, text=tokens, src_key_padding_mask=x_pad_mask) # TODO add src_key_padding_mask
+
+
+            # attention_map = self.get_attention_maps()
+            # source = x # [B, C, D, H, W]
+            # b, c, *spatial_shape = source.shape
+            # h = spatial_shape[1]//14
+            # att_map = rearrange(attention_map, 'b (c d) (h w) -> b c d h w', c=c, h=h) 
+            # att_map = F.interpolate(att_map, size=spatial_shape, mode='trilinear') # trilinear, area
+            # save_image(tensor_cam2image(minmax_norm(source.cpu()), minmax_norm(att_map.cpu()), alpha=0.5), f"overlay.png", normalize=False)
+
+
             logits = logits[:, -1:] # [B, N, C] -> [B, 1, C]
             next_token = self.logits2tokens(logits, **kwargs)
             tokens = torch.cat((tokens, next_token), dim=1)

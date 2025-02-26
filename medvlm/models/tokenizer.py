@@ -2,13 +2,15 @@ from transformers import AutoTokenizer
 import torch 
 
 class Tokenizer:
-    def __init__(self, model_name="microsoft/BiomedVLP-CXR-BERT-specialized", max_length=512, trust_remote_code=True):
+    def __init__(self, model_name="GerMedBERT/medbert-512", max_length=512, trust_remote_code=True): # meta-llama/Llama-3.2-1B GerMedBERT/medbert-512 microsoft/BiomedVLP-CXR-BERT-specialized FacebookAI/xlm-roberta-base
         """Wrapper to ensure compatibility """
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-        self.bos_token_id = tokenizer.cls_token_id  # Use <CLS> as <BOS> 
-        self.eos_token_id = tokenizer.sep_token_id  # Use <SEP> as <EOS>
+        self.bos_token_id = tokenizer.cls_token_id if tokenizer.bos_token_id is None else tokenizer.bos_token_id # Use <CLS> as <BOS> 
+        self.eos_token_id = tokenizer.sep_token_id if tokenizer.eos_token_id is None else tokenizer.eos_token_id # Use <SEP> as <EOS>
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = '<|finetune_right_pad_id|>' # Workaround for Llama
         self.pad_token_id = tokenizer.pad_token_id
-        self.max_length = max_length
+        self.max_length = max_length if max_length is not None else tokenizer.model_max_length
         self.vocab_size = tokenizer.vocab_size
         self.tokenizer = tokenizer
 

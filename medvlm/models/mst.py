@@ -5,6 +5,9 @@ from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 from transformers import Dinov2Config, Dinov2Model
 
+from .mve_3D import MVE as MVE3D
+from .mve_2D import MVE as MVE2D
+
 def _get_resnet_torch(model):
     return {
         18: models.resnet18, 34: models.resnet34, 50: models.resnet50, 101: models.resnet101, 152: models.resnet152
@@ -17,7 +20,7 @@ class MST(nn.Module):
         out_ch=1, # no effect if return_last_hidden_layer=True
         backbone_type="dinov2",
         model_size = "s", # 34, 50, ... or 's', 'b', 'l'
-        slice_fusion_type = "transformer", # transformer, linear, average, none 
+        slice_fusion_type = "none", # transformer, linear, average, none 
         num_slices=32, # only relevant for slice_fusion_type=linear
         return_last_hidden_layer = True
     ):
@@ -35,10 +38,23 @@ class MST(nn.Module):
             self.backbone = torch.hub.load('facebookresearch/dinov2', f'dinov2_vit{model_size}14')
             self.backbone.mask_token = None  # Remove - otherweise unused parameters error"
             emb_ch = self.backbone.num_features
+        elif backbone_type == "medinov2":
+            # self.backbone = torch.hub.load('mueller-franzes/MDino', f'dinov2_vit{model_size}14', source='github')
+            self.backbone = torch.hub.load('/home/homesOnMaster/gfranzes/Documents/code/MDino/', f'dinov2_vit{model_size}14', source='local')
+            self.backbone.mask_token = None  # Remove - otherweise unused parameters error"
+            emb_ch = self.backbone.num_features
         elif backbone_type == "dinov2-scratch":
             configuration = Dinov2Config()
             self.backbone = Dinov2Model(configuration)
             emb_ch = configuration.hidden_size
+        elif backbone_type == "mve2D":
+            self.backbone = MVE2D.load_from_checkpoint('runs/MVE/new/epoch=20-step=21000.ckpt')
+            emb_ch = self.backbone.emb_ch
+        elif backbone_type == "mve3D":
+            self.backbone = MVE3D.load_from_checkpoint('runs/MVE/3D/epoch=34-step=35000.ckpt')
+            emb_ch = self.backbone.emb_ch
+        else:
+            raise ValueError("Unknown backbone_type")
 
 
         self.emb_ch = emb_ch 
@@ -69,6 +85,9 @@ class MST(nn.Module):
         if  not return_last_hidden_layer:
             self.linear = nn.Linear(emb_ch, out_ch)
 
+        self.attention_maps_slice = []
+        self.attention_maps = []
+
 
     def forward(self, x, src_key_padding_mask=None, save_attn=False):
         if save_attn:
@@ -80,24 +99,35 @@ class MST(nn.Module):
             self.register_hooks()
     
         B, *_ = x.shape
+        self.B = B 
 
-        x = rearrange(x, 'b c d h w -> (b c d) h w')
-        x = x[:, None]
-        x = x.repeat(1, 3, 1, 1) # Gray to RGB
+        if self.backbone_type in ["mve3D"]:
+            x = rearrange(x, 'b c d h w -> (b c) 1 d h w')
+        else:
+            x = rearrange(x, 'b c d h w -> (b c d) h w')
+            x = x[:, None]
 
-        # x = rearrange(x, 'b c d h w -> (b d) c h w')
+        if self.backbone_type in ["resnet", "dinov2"]:
+            x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
-        # if self.training:
-        #     x = checkpoint(self.backbone, x)
-        # else:
-        #     x = self.backbone(x) # [(B D), C, H, W] -> [(B D), out] 
+
         x = checkpoint(self.backbone, x)
-        # self.backbone(x, is_training=True)['x_norm_patchtokens']
+        # x = checkpoint(self.backbone.encode, x)
+        # x = self.backbone(x, is_training=True)['x_norm_patchtokens']
 
         if self.backbone_type == "dinov2-scratch":
             x = x.pooler_output
 
-        x = rearrange(x, '(b d) e -> b d e', b=B)
+        if self.backbone_type in ["resnet", "dinov2"]:
+            x = rearrange(x, '(b d) e -> b d e', b=B)
+        elif self.backbone_type in ["mve2D"]:
+            x = rearrange(x, '(b d) 1 e -> b d e', b=B)
+        elif self.backbone_type in ["mve3D"]:
+            x = rearrange(x, '(b c) k e -> b (c k) e', b=B)
+
+        # x = rearrange(x, 'b c d h w -> (b c) 1 d h w')
+        # x = checkpoint(self.backbone.encode, x)
+        # x = rearrange(x, '(b c) l e -> b (c l) e', b=B)
 
         if self.slice_fusion_type == 'none':
             return x
@@ -134,20 +164,22 @@ class MST(nn.Module):
 
         # Average attention heads
         attention_map_slice = attention_map_slice.mean(dim=1)  #  [B, Heads, D] -> [B, D]
-        attention_map_slice = attention_map_slice.view(-1) # [B*D]
-        attention_map_slice = attention_map_slice[:, None, None] # [B*D, 1, 1]
+        attention_map_slice = attention_map_slice[:, None] # [B, D, 1]
         return attention_map_slice
     
     def get_plane_attention(self):
-        attention_map_dino = self.attention_maps[-1] # [B*D, Heads, 1+HW, 1+HW]
-        num_register_tokens = self.backbone.num_register_tokens  if self.use_registers else 0
-        img_slice = slice(num_register_tokens+1, None) 
+        attention_map_dino = self.attention_maps[-1] # [Layer1, Layer2, ...] -> [B*D, Heads, 1+HW, 1+HW]
+        img_slice = slice(self.backbone.num_register_tokens+1, None) 
         attention_map_dino = attention_map_dino[:,:, 0, img_slice] # [B*D, Heads, HW]
+        attention_map_dino = attention_map_dino.mean(dim=1) # -> [B*D, HW]
         attention_map_dino /= attention_map_dino.sum(dim=-1, keepdim=True)
+        attention_map_dino = rearrange(attention_map_dino, '(b d) e -> b d e', b=self.B) # [B, D, HW]
         return attention_map_dino
 
     def get_attention_maps(self):
         attention_map_dino = self.get_plane_attention()
+        if self.slice_fusion_type == 'none':
+            return attention_map_dino
         attention_map_slice = self.get_slice_attention()
         attention_map = attention_map_slice*attention_map_dino
         return attention_map

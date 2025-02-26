@@ -151,7 +151,7 @@ class CropOrPad(tio.CropOrPad):
         padding_mode: Union[str, float] = 0,
         mask_name: Optional[str] = None,
         labels: Optional[Sequence[int]] = None,
-        random_center=False,
+        padding_position='center', # 'center', 'start', 'end', 'random'
         **kwargs,
     ):
         super().__init__(
@@ -161,32 +161,41 @@ class CropOrPad(tio.CropOrPad):
             labels=labels,
             **kwargs
         )
-        self.random_center = random_center
+        self.padding_position = padding_position
+
+    def _get_ini(self, max_value):
+        if self.padding_position == "end":
+            return 0
+        elif self.padding_position == "start":
+            return max_value
+        elif self.padding_position == "center":
+            return int(np.ceil(max_value/2))
+        elif self.padding_position == "random":
+            return np.random.randint(0, max_value+1)
+        else:
+            raise ValueError(f"padding_position must be 'end', 'start', 'center' or 'random' but got {self.padding_position}")
 
     def _get_six_bounds_parameters(self, parameters: np.ndarray) :
         result = []
         for number in parameters:
-            if self.random_center:
-                ini = np.random.randint(low=0, high=number+1)
-            else:
-                ini = int(np.ceil(number/2))
+            ini = self._get_ini(number)
             fin = number-ini
             result.extend([ini, fin])
         return tuple(result)
-    
         
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
         subject.check_consistent_space()
         padding_params, cropping_params = self.compute_crop_or_pad(subject)
         padding_kwargs = {'padding_mode': self.padding_mode}
+
+        
         if padding_params is not None:
-            if self.random_center:
-                random_padding_params = []
-                for i in range(0, len(padding_params), 2):
-                    s = padding_params[i] + padding_params[i + 1]
-                    r = np.random.randint(0, s+1)
-                    random_padding_params.extend([r, s - r])
-                padding_params = random_padding_params
+            # If a mask is provided, _get_six_bounds_parameters won't be called
+            padding_params = list(padding_params)  # Convert tuple to list
+            for i in range(0, len(padding_params), 2):
+                total = padding_params[i] + padding_params[i + 1]
+                ini = self._get_ini(total)
+                padding_params[i], padding_params[i + 1] = ini, total - ini
             pad = tio.Pad(padding_params, **padding_kwargs)
             subject = pad(subject)  # type: ignore[assignment]
         if cropping_params is not None:

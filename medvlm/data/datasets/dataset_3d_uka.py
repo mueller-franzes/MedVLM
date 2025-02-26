@@ -6,12 +6,27 @@ import torch
 from torchvision import transforms as T
 import torch.nn as nn
 
-from .augmentations.augmentations_3d import ImageOrSubjectToTensor, ZNormalization, CropOrPad
+from .augmentations.augmentations_3d import ImageOrSubjectToTensor, ZNormalization, CropOrPad, RescaleIntensity
 
 class UKA_Dataset3D(data.Dataset):
-    PATH_ROOT = Path.home()/'Documents/datasets/ODELIA/UKA_all'
-    LABEL = 'Karzinom' # Fibroadenom Adenose Lympfknoten Zyste Fettgewebsnekrose Hyperplasie Duktektasie Papillom Hamartom Radiäre Narbe Duktales Karzinom in situ (DCIS) Karzinom
-
+    # PATH_ROOT = Path.home()/'Documents/datasets/ODELIA/UKA_all'
+    # PATH_ROOT = Path('/mnt/ocean_storage/users/gfranzes/UKA_Breast/')
+    PATH_ROOT = Path('/mnt/datasets_gustav/UKA/')
+    LABEL = 'Karzinom'
+    LABELS = [
+        'Fibroadenom', 
+        'Adenose', 
+        'Lympfknoten', 
+        'Zyste', 
+        'Fettgewebsnekrose', 
+        # 'Hyperplasie', 
+        'Duktektasie', 
+        # 'Papillom', 
+        # 'Hamartom', 
+        'Radiäre Narbe', 
+        'Duktales Karzinom in situ (DCIS)', 
+        'Karzinom'
+    ]
     def __init__(
             self,
             path_root=None,
@@ -35,14 +50,16 @@ class UKA_Dataset3D(data.Dataset):
         if transform is None: 
             self.transform = tio.Compose([
                 tio.Flip((1,0)), # Just for viewing, otherwise upside down
-                CropOrPad((224, 224, 32), random_center=random_center, padding_mode='minimum'), # WANRING: Padding mode also for LabelMap
+                CropOrPad((256, 256, 32), padding_position='end', padding_mode=0), # WANRING: Padding mode also for LabelMap
+                CropOrPad((224, 224, 32), padding_position='random', padding_mode=0), # WANRING: Padding mode also for LabelMap
 
                 ZNormalization(per_channel=True, per_slice=False, masking_method=lambda x:(x>x.min()) & (x<x.max()), percentiles=(0.5, 99.5)), 
+                # RescaleIntensity((-2, 2), per_channel=True, per_slice=False, masking_method=lambda x:(x>x.min()) & (x<x.max()), percentiles=(0.5, 99.5)),
 
                 tio.Lambda(lambda x: x.moveaxis(1, 2) if torch.rand((1,),)[0]<0.5 else x ) if random_rotate else tio.Lambda(lambda x: x), # WARNING: 1,2 if Subject, 2, 3 if tensor
-                tio.RandomAffine(scales=0, degrees=(0, 0, 0, 0, 0,90), translation=0, isotropic=True, default_pad_value='minimum') if random_rotate else tio.Lambda(lambda x: x),
-                tio.RandomFlip((0,1,2)) if random_flip else tio.Lambda(lambda x: x), # WARNING: Padding mask 
-                tio.Lambda(lambda x:-x if torch.rand((1,),)[0]<0.5 else x, types_to_apply=[tio.INTENSITY]) if random_inverse else tio.Lambda(lambda x: x),
+                # tio.RandomAffine(scales=0, degrees=(0, 0, 0, 0, 0,10), translation=0, isotropic=True, default_pad_value='minimum') if random_rotate else tio.Lambda(lambda x: x),
+                tio.RandomFlip((0,1)) if random_flip else tio.Lambda(lambda x: x), # WARNING: Padding mask, DON'T FLIP Z when "end"-padding
+                # tio.Lambda(lambda x:-x if torch.rand((1,),)[0]<0.5 else x, types_to_apply=[tio.INTENSITY]) if random_inverse else tio.Lambda(lambda x: x),
                 tio.RandomNoise(std=(0.0, 0.25)) if random_noise else tio.Lambda(lambda x: x),
 
                 ImageOrSubjectToTensor() if to_tensor else tio.Lambda(lambda x: x)             
@@ -93,7 +110,12 @@ class UKA_Dataset3D(data.Dataset):
         # df_reports[df_reports.index.isin(self.df['UID'])]['Findings'].isna().sum()
         self.df = self.df[self.df['UID'].isin(df_reports.index)]
 
-        self.item_pointers = self.df.index.tolist()
+        # df_files = pd.read_csv(self.path_root/f'metadata/files.csv' )
+        # df_files = df_files[['UID', 'Post_1', 'Post_2', 'Post_3', 'Post_4']].dropna()
+        # self.df = self.df[self.df['UID'].isin(df_files['UID'])]
+
+        self.item_pointers =  self.df.index.tolist()
+        # self.item_pointers =  self.df.index.tolist()[:32*10] * 100
 
     def __len__(self):
         return len(self.item_pointers)
@@ -103,6 +125,13 @@ class UKA_Dataset3D(data.Dataset):
 
     def load_map(self, path_img):
         return tio.LabelMap(path_img)
+    
+    def get_sub(self, dyn_img):
+        dyn_img.load()
+        sub_img = torch.stack([dyn_img.data[i]-dyn_img.data[0] for i in range(1, dyn_img.shape[0])])
+        sub_img = tio.ScalarImage(tensor=sub_img, affine=dyn_img.affine)
+        return sub_img
+
 
     def __getitem__(self, index):
         idx = self.item_pointers[index]
@@ -112,17 +141,45 @@ class UKA_Dataset3D(data.Dataset):
         text = self.df_reports.loc[uid]['Findings']
  
 
-        img = self.load_img(self.path_root/'data_unilateral'/uid/'Sub.nii.gz')
-        # img = self.load_img([self.path_root/'data_unilateral'/uid/img_name for img_name in ['Sub.nii.gz', 'Pre.nii.gz', 'T2_resampled.nii.gz']])
-        mask_fg = img.data[0].sum(0).sum(0)>0
+        # dyn_img = self.load_img([self.path_root/'data_unilateral'/uid/img_name for img_name in ['Pre.nii.gz', 'Post_1.nii.gz', 'Post_2.nii.gz', 'Post_3.nii.gz', 'Post_4.nii.gz']])
+        dyn_img = self.load_img(self.path_root/'data_unilateral'/uid/'Pre.nii.gz' )
+        sub_img = self.load_img(self.path_root/'data_unilateral'/uid/'Sub.nii.gz' )
+        t2_img = self.load_img(self.path_root/'data_unilateral'/uid/'T2.nii.gz' )
+
+        mask_fg = t2_img.data[0].sum(0).sum(0)>0
+
+        # Crop to slices with data 
+        dyn_img.set_data(dyn_img.data[:,:,:, mask_fg])
+        sub_img.set_data(sub_img.data[:,:,:, mask_fg])
+        t2_img.set_data(t2_img.data[:,:,:, mask_fg])
+        mask_fg = mask_fg[mask_fg]
+
+        img = tio.Image(tensor=torch.cat([
+            dyn_img.data[:,:,:, mask_fg],
+            sub_img.data[:,:,:, mask_fg],
+            t2_img.data[:,:,:, mask_fg],
+        ],dim=0), affine=sub_img.affine )
+        mask_fg = mask_fg[mask_fg]
+
+        # mask_fg = tio.LabelMap(tensor=torch.ones_like(dyn_img.data, dtype=torch.int32)*mask_fg[None] , affine=dyn_img.affine)
+        # sub = tio.Subject(dyn_img=dyn_img, t2_img=t2_img, mask_fg=mask_fg)
+
         mask_fg = tio.LabelMap(tensor=torch.ones_like(img.data, dtype=torch.int32)*mask_fg[None] , affine=img.affine)
         sub = tio.Subject(img=img, mask_fg=mask_fg)
     
         sub = self.transform(sub)
-
+        
         img = sub['img']
+        # img = torch.cat([sub['dyn_img'], sub['sub_img']], dim=0)
+        # img = torch.cat([sub['t2_img'], sub['dyn_img'], sub['sub_img']], dim=0)
+
+        # dyn_img = sub['dyn_img']
+        # t2_img = sub['t2_img']
+        # img = torch.stack([t2_img[0], dyn_img[0], dyn_img[1]-dyn_img[0], dyn_img[2]-dyn_img[0], dyn_img[3]-dyn_img[0], dyn_img[4]-dyn_img[0]], dim=0)
+
         mask_fg = sub['mask_fg']
         src_key_padding_mask = ~(mask_fg[0].sum(-1).sum(-1)>0)
+        src_key_padding_mask = src_key_padding_mask.repeat(img.shape[0])
 
         # if (self.split == 'train'): 
         #     rand_idx = torch.randperm(32)

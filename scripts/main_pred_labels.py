@@ -6,14 +6,16 @@ from pathlib import Path
 import torch.nn.functional as F
 from medvlm.models.medvlm import MedVLM
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
+from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 from medvlm.data.datamodule import DataModule
 from medvlm.models.tokenizer import Tokenizer
 from medvlm.utils.gpu import get_gpu_with_max_free_memory
 
 tokenizer = Tokenizer()
 
-ds_test = CTRATE_Dataset3D(split='test', tokenizer=tokenizer)
-for label in ds_test.LABELS[7:8]:
+ds_test = UKA_Dataset3D(split='test', tokenizer=tokenizer)
+# ds_test = CTRATE_Dataset3D(split='test', tokenizer=tokenizer)
+for label in ds_test.LABELS[1:]:
     ds_test.LABEL = label
 
     best_gpu_index, max_free_memory = get_gpu_with_max_free_memory()
@@ -21,7 +23,7 @@ for label in ds_test.LABELS[7:8]:
     device=torch.device(f'cuda:{best_gpu_index}')
 
     # Load the model
-    path_run = Path('runs/CTRATE/MedVLM_2025_01_24_140928_w_contrastive/epoch=5-step=3624.ckpt')
+    path_run = Path('runs/UKA/MedVLM_2025_02_25_170749/epoch=7-step=3632.ckpt')
     model = MedVLM.load_from_checkpoint(path_run)
     model.to(device)
     model.eval()
@@ -45,7 +47,7 @@ for label in ds_test.LABELS[7:8]:
         src_key_padding_masks = src_key_padding_masks.repeat_interleave(2, dim=0)
 
         # Prepare text prompts
-        text1 = model.tokenizer_y(f"No {ds_test.LABEL}")
+        text1 = model.tokenizer_y(f"Kein {ds_test.LABEL}") # No or Kein 
         text2 = model.tokenizer_y(f"{ds_test.LABEL}")
         text = torch.stack([text1, text2])[:, :-1].to(device)
 

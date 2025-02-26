@@ -104,3 +104,25 @@ def tensor_cam2image(tensor, cam, batch=0, alpha=0.5, color_map=get_cmap('jet'))
     overlay = (1-alpha)*img + alpha*cam_img
 
     return overlay
+
+
+
+def combine_padding_and_attention_masks(
+    padding_mask: torch.Tensor,  # Shape: [B, L]
+    attention_mask: torch.Tensor,  # Shape: [L, L]
+) -> torch.Tensor:
+    
+    # Expand the padding mask to shape [B, 1, 1, L]
+    padding_mask_expanded = padding_mask[:, None, None, :]  # [B, 1, 1, L]
+
+    # Expand the attention mask to shape [1, 1, L, L]
+    attention_mask_expanded = attention_mask[None, None, :, :]  # [1, 1, L, L]
+    
+    # Combine both masks 
+    combined_mask = attention_mask_expanded | padding_mask_expanded  # [B, 1, L, L]
+
+
+    combined_mask = (~combined_mask).float()
+    combined_mask = combined_mask.masked_fill(combined_mask == 0, float('-inf'))
+
+    return combined_mask
