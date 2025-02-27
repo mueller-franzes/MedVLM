@@ -17,3 +17,7 @@ If not, change `pytorch-cuda=XX.X` in the [environment.yaml](environment.yaml) f
 
 ## Step 3: Predict & Evaluate Performance
 * Run Script: [scripts/main_predict.py](scripts/main_predict.py)
+
+
+## Acknowledgment
+The project is funded by the German Federal Ministry of Education and Research (BMBF) under the DataXperiment program (grant 01KD2430). 
