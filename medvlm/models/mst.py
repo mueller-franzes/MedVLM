@@ -4,6 +4,7 @@ import torchvision.models as models
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
 from transformers import Dinov2Config, Dinov2Model
+import x_transformers
 
 from .mve_3D import MVE as MVE3D
 from .mve_2D import MVE as MVE2D
@@ -13,7 +14,16 @@ def _get_resnet_torch(model):
         18: models.resnet18, 34: models.resnet34, 50: models.resnet50, 101: models.resnet101, 152: models.resnet152
     }.get(model) 
 
-
+class Encoder(x_transformers.Encoder):
+    def forward(self, 
+            x, 
+            mask=None, 
+            src_key_padding_mask=None
+        ):
+        src_key_padding_mask = ~src_key_padding_mask if src_key_padding_mask is not None else None
+        mask = ~mask if mask is not None else None
+        return super().forward(x, None, src_key_padding_mask, None, mask)
+    
 class MST(nn.Module):
     def __init__(
         self, 
@@ -49,9 +59,12 @@ class MST(nn.Module):
             emb_ch = configuration.hidden_size
         elif backbone_type == "mve2D":
             self.backbone = MVE2D.load_from_checkpoint('runs/MVE/new/epoch=20-step=21000.ckpt')
+            del self.backbone.decoder 
             emb_ch = self.backbone.emb_ch
         elif backbone_type == "mve3D":
             self.backbone = MVE3D.load_from_checkpoint('runs/MVE/3D/epoch=34-step=35000.ckpt')
+            del self.backbone.decoder
+            del self.backbone.mve2d.decoder
             emb_ch = self.backbone.emb_ch
         else:
             raise ValueError("Unknown backbone_type")
@@ -72,6 +85,17 @@ class MST(nn.Module):
                 num_layers=4,
                 norm=nn.LayerNorm(emb_ch)
             )
+            # self.slice_fusion = Encoder(
+            #     dim = emb_ch,
+            #     heads = 12 if emb_ch%12 == 0 else 8,
+            #     ff_mult = 1,
+            #     attn_dropout=0.0,
+            #     pre_norm = True,
+            #     depth = 4,
+            #     attn_flash = True,
+            #     ff_no_bias = True, 
+            #     rotary_pos_emb=True,
+            # )
             self.cls_token = nn.Parameter(torch.randn(1, 1, emb_ch))
         elif slice_fusion_type == 'linear':
             self.slice_fusion = nn.Linear(num_slices, 1)
@@ -87,6 +111,7 @@ class MST(nn.Module):
 
         self.attention_maps_slice = []
         self.attention_maps = []
+
 
 
     def forward(self, x, src_key_padding_mask=None, save_attn=False):
@@ -110,9 +135,9 @@ class MST(nn.Module):
         if self.backbone_type in ["resnet", "dinov2"]:
             x = x.repeat(1, 3, 1, 1) # Gray to RGB
 
-
-        x = checkpoint(self.backbone, x)
-        # x = checkpoint(self.backbone.encode, x)
+        x = self.backbone(x)
+        # x = checkpoint(self.backbone, x.requires_grad_())
+        # x = checkpoint(self.backbone.encode, x.requires_grad_())
         # x = self.backbone(x, is_training=True)['x_norm_patchtokens']
 
         if self.backbone_type == "dinov2-scratch":
@@ -156,103 +181,41 @@ class MST(nn.Module):
         return x
     
 
+    def forward_mask(self, block, x, mask_i):
+        """
+        Recompute the class token representation with the contribution of one patch token removed.
+        """
+        x = self.run_block(block, x, mask_i)
+        x_norm = self.model.norm(x)
+        x_norm_clstoken = x_norm[:, 0]
+        pred = self.merge_slices(x_norm_clstoken)
+        return pred
     
-    def get_slice_attention(self):
-        attention_map_slice = self.attention_maps_slice[-1] # [B, Heads, 1+D(+regs), 1+D(+regs)]
-        attention_map_slice = attention_map_slice[:, :, 0, 1:] # [B, Heads, D]
-        attention_map_slice /= attention_map_slice.sum(dim=-1, keepdim=True)
 
-        # Average attention heads
-        attention_map_slice = attention_map_slice.mean(dim=1)  #  [B, Heads, D] -> [B, D]
-        attention_map_slice = attention_map_slice[:, None] # [B, D, 1]
-        return attention_map_slice
+
+    def forward_attention(self, x):
+        self.B, self.C, self.D, *_ = x.shape
+        with torch.no_grad():
+            x = self.reshape(x)
+            x = self.backbone.prepare_tokens_with_masks(x)
+            for blk in self.backbone.blocks[:-1]:
+                x = blk(x)
+
+            # Compute normal output 
+            pred =  self.forward_mask(self.model.blocks[-1], x, None)
+            
+            # Compute last block with masked attention 
+            token_relevance = []
+            for c in range(self.C):
+                for d in range(self.D):
+                    for token_i in range(1, x.shape[1]):
+                        pred_i = self.forward_mask(self.model.blocks[-1], x, (c, d, token_i))
+                        rel_change = (pred.sigmoid() - pred_i.sigmoid()).abs() 
+                        token_relevance.append(rel_change)
+
+        token_relevance = torch.stack(token_relevance, dim=1)
+        token_relevance = rearrange(token_relevance, 'B (C D M) K -> B C D M K', C=self.C, D=self.D)
+
+
+        return pred, token_relevance
     
-    def get_plane_attention(self):
-        attention_map_dino = self.attention_maps[-1] # [Layer1, Layer2, ...] -> [B*D, Heads, 1+HW, 1+HW]
-        img_slice = slice(self.backbone.num_register_tokens+1, None) 
-        attention_map_dino = attention_map_dino[:,:, 0, img_slice] # [B*D, Heads, HW]
-        attention_map_dino = attention_map_dino.mean(dim=1) # -> [B*D, HW]
-        attention_map_dino /= attention_map_dino.sum(dim=-1, keepdim=True)
-        attention_map_dino = rearrange(attention_map_dino, '(b d) e -> b d e', b=self.B) # [B, D, HW]
-        return attention_map_dino
-
-    def get_attention_maps(self):
-        attention_map_dino = self.get_plane_attention()
-        if self.slice_fusion_type == 'none':
-            return attention_map_dino
-        attention_map_slice = self.get_slice_attention()
-        attention_map = attention_map_slice*attention_map_dino
-        return attention_map
-    
-    
-    def register_hooks(self):
-        # ------------------------- Backbone attention -----------------
-        def enable_attention_dino(mod):
-                forward_orig = mod.forward
-                def forward_wrap(self2, x):
-                    # forward_orig.__self__
-                    B, N, C = x.shape
-                    qkv = self2.qkv(x).reshape(B, N, 3, self2.num_heads, C // self2.num_heads).permute(2, 0, 3, 1, 4)
-                    
-                    q, k, v = qkv[0] * self2.scale, qkv[1], qkv[2]
-                    attn = q @ k.transpose(-2, -1)
-           
-                    attn = attn.softmax(dim=-1)
-                    attn = self2.attn_drop(attn)
-
-                    x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-                    x = self2.proj(x)
-                    x = self2.proj_drop(x)
-
-                    # Hook attention map 
-                    self.attention_maps.append(attn)
-
-                    return x
-                
-                mod.forward = lambda x: forward_wrap(mod, x)
-                mod.foward_orig = forward_orig
-
-        # Hook Dino Attention
-        for name, mod in self.backbone.named_modules():
-            if name.endswith('.attn'):
-                enable_attention_dino(mod)
-
-        # ------------------------- Slice fusion attention -----------------
-        if self.slice_fusion_type != 'transformer':
-            return 
-        
-        def enable_attention(module):
-            forward_orig = module.forward
-            def forward_wrap(*args, **kwargs):
-                kwargs["need_weights"] = True
-                kwargs["average_attn_weights"] = False
-                return forward_orig(*args, **kwargs)
-            module.forward = forward_wrap
-            module.foward_orig = forward_orig
-
-
-        def append_attention_maps(module, input, output):
-            self.attention_maps_slice.append(output[1])
-
-        for _, mod in self.slice_fusion.named_modules():
-            if isinstance(mod, nn.MultiheadAttention):
-                enable_attention(mod)
-                self.hooks.append(mod.register_forward_hook(append_attention_maps))
-
-
-    def deregister_hooks(self):
-        for handle in self.hooks:
-            handle.remove()
-
-        # ------------------------- Backbone attention -----------------
-        for name, mod in self.backbone.named_modules():
-            if name.endswith('.attn'):
-                mod.forward = mod.foward_orig
-    
-        # ------------------------- Slice fusion attention -----------------
-        if self.slice_fusion_type != 'transformer':
-            return 
-        
-        for _, mod in self.slice_fusion.named_modules():
-            if isinstance(mod, nn.MultiheadAttention):
-                mod.forward = mod.foward_orig

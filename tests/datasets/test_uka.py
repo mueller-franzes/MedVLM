@@ -6,16 +6,21 @@ from tqdm import tqdm
 
 from medvlm.models.utils.functions import tensor2image, tensor_mask2image, one_hot
 from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
+from medvlm.models.tokenizer import Tokenizer
+
+
+tokenizer = Tokenizer()
 
 
 ds = UKA_Dataset3D(
-    split='train',
-    random_flip=True, 
-    random_noise=True, 
-    random_center=True, 
-    random_rotate=True,
-    random_inverse=True,
+    # split='train',
+    # random_flip=True, 
+    # random_noise=True, 
+    # random_center=True, 
+    # random_rotate=True,
+    # random_inverse=True,
     # use_s3=True
+    tokenizer=tokenizer
 )
 
 # results = []

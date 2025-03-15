@@ -10,6 +10,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchvision.utils import save_image
 from einops import rearrange
 import  torch.optim.lr_scheduler as lr_scheduler
+import torch.distributed as dist
 
 from .utils.functions import tensor2image, tensor_cam2image, minmax_norm, one_hot, tensor_mask2image
 import wandb
@@ -175,13 +176,14 @@ class BasicVLM(BasicModel):
         optimizer = torch.optim.AdamW,
         optimizer_kwargs ={'lr':5e-4},
         lr_scheduler= lr_scheduler.LinearLR, 
-        lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':10000},
+        lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':1000},
         save_hyperparameters=True
     ):
         super().__init__(optimizer, optimizer_kwargs, 
-                        #  lr_scheduler, 
-                        #  lr_scheduler_kwargs, 
-                         save_hyperparameters=save_hyperparameters)
+                         lr_scheduler, 
+                         lr_scheduler_kwargs, 
+                         save_hyperparameters=save_hyperparameters
+                         )
 
         self.tokenizer_y = tokenizer_y
         self.cliploss = CLIPLossA()
@@ -192,40 +194,50 @@ class BasicVLM(BasicModel):
     def _step(self, batch: dict, batch_idx: int, state: str, step: int):
         x, y = batch['img'], batch['text']
         src_key_padding_mask = batch['src_key_padding_mask']
-        self.batch_size = x.shape[0] 
+        self.batch_size = x.shape[0]  * dist.get_world_size()  # Get global batch size
         logging_dict = {}
 
 
         # ------------------- Run Model --------------------------
-        logits  = self.forward(img=x, text=y[:, :-1], src_key_padding_mask=src_key_padding_mask) # [B, T, C]
+        memory_cls, text_cls, text_logits, vision_logits  = self.forward(img=x, text=y[:, :-1], src_key_padding_mask=src_key_padding_mask) # [B, T, C]
 
 
         # ------------------------- Compute Loss ---------------------------
-        ce = 0
+        # Compute Cross Entropy Loss for text generation
+        # ce = 0
         y = y[:, 1:] # Remove <SOS> 
-        y_pred = logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
+        y_pred = text_logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
         ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
        
-
-        image_embeddings = self.memory_cls
-        text_embeddings = self.tgt_cls
+        # Compute Contrastive Loss 
+        image_embeddings = memory_cls
+        text_embeddings = text_cls
         image_embeddings = F.normalize(image_embeddings, dim=-1)
         text_embeddings = F.normalize(text_embeddings, dim=-1)
+
+        # Gather embeddings from all GPUs
+        image_embeddings = self.all_gather(image_embeddings, sync_grads=True) # [World_size, B, C]
+        text_embeddings = self.all_gather(text_embeddings, sync_grads=True)
+        # Ensure all gathered features are correctly reshaped
+        image_embeddings = image_embeddings.view(-1, image_embeddings.shape[-1]) # [World_size, B, C] -> [B*World_size, C]
+        text_embeddings = text_embeddings.view(-1, text_embeddings.shape[-1])
+
         contrastive_loss, _, _ = self.cliploss(image_embeddings, text_embeddings)
 
+ 
         # Compute contrastive loss without temperature scaling
         with torch.no_grad():
             contrastive_loss_fix, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings, temperature=1)
         
 
-        loss = ce+contrastive_loss#+self.loss2 #-cs+cs2 #self.loss2
+        loss = ce+contrastive_loss+self.loss2 #-cs+cs2 #self.loss2
         logging_dict['ce'] = ce
         logging_dict['ce2'] = contrastive_loss
         logging_dict['contastive_real'] = contrastive_loss_fix
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
-        # logging_dict['loss2'] = self.loss2
+        logging_dict['loss2'] = self.loss2
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
@@ -238,7 +250,7 @@ class BasicVLM(BasicModel):
   
             # ----------------- Log Scalars ----------------------
             for metric_name, metric_val in logging_dict.items():
-                self.log(f"{state}/{metric_name}", metric_val,
+                self.log(f"{state}/{metric_name}", metric_val.detach() if hasattr(metric_val, "detach") else metric_val,
                          batch_size=self.batch_size, on_step=True, on_epoch=True, prog_bar=metric_name=="loss", sync_dist=True) 
 
 
@@ -247,8 +259,8 @@ class BasicVLM(BasicModel):
 
 
     @torch.no_grad()
-    def generate(self, x=None, y=None, x_pad_mask = None, return_logits=False, **kwargs):
-        pred_tokens, logits = self._generate(x=x, y=y, x_pad_mask=x_pad_mask, **kwargs)
+    def generate(self, text=None, img=None, src_key_padding_mask = None, return_logits=False, **kwargs):
+        pred_tokens, logits = self._generate(text=text, img=img, src_key_padding_mask=src_key_padding_mask, **kwargs)
         pred = self.tokenizer_y.decode(pred_tokens)
         if return_logits:
             return pred, logits
@@ -256,28 +268,20 @@ class BasicVLM(BasicModel):
     
 
     @torch.no_grad()
-    def _generate(self, x=None, y=None, x_pad_mask=None, max_new_tokens=None, batch_size=1, **kwargs):
+    def _generate(self, text=None, img=None, src_key_padding_mask=None, max_new_tokens=None, batch_size=1, **kwargs):
         max_new_tokens = self.tokenizer_y.max_length if max_new_tokens is None else max_new_tokens 
         bos_token_id = self.tokenizer_y.bos_token_id
         eos_token_id = self.tokenizer_y.eos_token_id
 
-        tokens = y
+        tokens = text
         if tokens is None:
             tokens = torch.tensor([bos_token_id], device=self.device).repeat(batch_size, 1)
 
         n=0
         while True:
-            logits = self.forward(img=x, text=tokens, src_key_padding_mask=x_pad_mask) # TODO add src_key_padding_mask
-
-
-            # attention_map = self.get_attention_maps()
-            # source = x # [B, C, D, H, W]
-            # b, c, *spatial_shape = source.shape
-            # h = spatial_shape[1]//14
-            # att_map = rearrange(attention_map, 'b (c d) (h w) -> b c d h w', c=c, h=h) 
-            # att_map = F.interpolate(att_map, size=spatial_shape, mode='trilinear') # trilinear, area
-            # save_image(tensor_cam2image(minmax_norm(source.cpu()), minmax_norm(att_map.cpu()), alpha=0.5), f"overlay.png", normalize=False)
-
+            _, memory = self.forward_vision(img, src_key_padding_mask=src_key_padding_mask)
+            _, text_emb = self.forward_text(tokens) 
+            logits = self.forward_vision_text(memory, text_emb)
 
             logits = logits[:, -1:] # [B, N, C] -> [B, 1, C]
             next_token = self.logits2tokens(logits, **kwargs)
@@ -286,14 +290,12 @@ class BasicVLM(BasicModel):
             n = n+1
             if (next_token == eos_token_id) or n>=max_new_tokens :
                 break 
-            
-    
+        
         # tokens = tokens[:, 1:] # Maybe remove SOS or x 
         return tokens, logits_seq 
     
+    
     def logits2tokens(self, logits, top_k=1, temperature=1.0):
-        # return torch.argmax(logits, dim=-1)
-        # TODO Something is wrong with this function 
         # logits: [B, N, C] 
         C = logits.size(-1)
 

@@ -10,15 +10,17 @@ from medvlm.utils.roc_curve import plot_roc_curve
 from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 
 # ------------------------------- Settings ---------------------------------
-path_run_dir = Path('runs/UKA/MedVLM_2025_02_25_170749_with_text')
+path_run_dir = Path('runs/UKA/MedVLM_2025_03_08_121508_batch64')
 path_out = Path.cwd()/'results'/path_run_dir.name
 path_out.mkdir(parents=True, exist_ok=True)
 
 fontdict = {'fontsize': 11, 'fontweight': 'bold'}
 
-for label in UKA_Dataset3D.LABELS:
+results = []
+for label in  UKA_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
     print("-------------------", label, "-------------------")
-    
+    result = {'Label': label}
+
     # Read csv with predictions
     df = pd.read_csv(path_run_dir/'results'/f'predictions_{label}.csv')
 
@@ -28,11 +30,12 @@ for label in UKA_Dataset3D.LABELS:
     y_pred_lab = np.asarray(df['Prob'])
     y_true_lab = np.asarray(df['GT'])
 
-    tprs, fprs, auc_val, thrs, opt_idx, cm = plot_roc_curve(y_true_lab, y_pred_lab, axis, name=f'{label} AUC:', fontdict=fontdict)
+    tprs, fprs, auc_val, std_auc, thrs, opt_idx, cm = plot_roc_curve(y_true_lab, y_pred_lab, axis, name=f'{label} AUC:', fontdict=fontdict)
     axis.set_title(f'{label}', fontdict=fontdict)
     fig.tight_layout()
     fig.savefig(path_out/f'roc_{label}.png', dpi=300)
-
+    result['AUC'] = auc_val
+    result['AUC_std'] = std_auc
 
     #  -------------------------- Confusion Matrix -------------------------
     labels = ["No", "Yes"]
@@ -47,3 +50,8 @@ for label in UKA_Dataset3D.LABELS:
     axis.set_ylabel('True' , fontdict=fontdict)
     fig.tight_layout()
     fig.savefig(path_out/f'confusion_matrix_{label}.png', dpi=300)
+
+    results.append(result)
+
+df = pd.DataFrame(results)
+df.to_csv(path_out/'results_summary.csv', index=False)

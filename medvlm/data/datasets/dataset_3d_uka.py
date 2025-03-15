@@ -10,13 +10,14 @@ from .augmentations.augmentations_3d import ImageOrSubjectToTensor, ZNormalizati
 
 class UKA_Dataset3D(data.Dataset):
     # PATH_ROOT = Path.home()/'Documents/datasets/ODELIA/UKA_all'
-    # PATH_ROOT = Path('/mnt/ocean_storage/users/gfranzes/UKA_Breast/')
-    PATH_ROOT = Path('/mnt/datasets_gustav/UKA/')
+    PATH_ROOT = Path('/mnt/ocean_storage/users/gfranzes/UKA_Breast/')
+    # PATH_ROOT = Path('/mnt/datasets_gustav/UKA/')
+
     LABEL = 'Karzinom'
     LABELS = [
         'Fibroadenom', 
         'Adenose', 
-        'Lympfknoten', 
+        'Lymphknoten', 
         'Zyste', 
         'Fettgewebsnekrose', 
         # 'Hyperplasie', 
@@ -81,7 +82,7 @@ class UKA_Dataset3D(data.Dataset):
  
 
         # Get split file 
-        path_csv = self.path_root/f'metadata/split_regex_{self.LABEL}.csv' 
+        path_csv = self.path_root/f'metadata/split_regex.csv' 
         self.df = self.load_split(path_csv, fold=fold, split=split, fraction=fraction)
         
 
@@ -103,8 +104,8 @@ class UKA_Dataset3D(data.Dataset):
         
 
         # if tokenizer is not None:
-        #     eos_token_id = tokenizer.tokenizer.eos_token_id
-        #     df_reports = df_reports[df_reports['Findings'].apply(lambda x: (tokenizer(x)[0] == eos_token_id).nonzero().squeeze().item()<511)] # only 96 cases 161
+        #     eos_token_id = tokenizer.eos_token_id
+        #     df_reports = df_reports[df_reports['Findings'].apply(lambda x: (tokenizer(x) == eos_token_id).nonzero().squeeze().item()<511)] # only 96 cases 161
 
         self.df_reports = df_reports
         # df_reports[df_reports.index.isin(self.df['UID'])]['Findings'].isna().sum()
@@ -144,20 +145,20 @@ class UKA_Dataset3D(data.Dataset):
         # dyn_img = self.load_img([self.path_root/'data_unilateral'/uid/img_name for img_name in ['Pre.nii.gz', 'Post_1.nii.gz', 'Post_2.nii.gz', 'Post_3.nii.gz', 'Post_4.nii.gz']])
         dyn_img = self.load_img(self.path_root/'data_unilateral'/uid/'Pre.nii.gz' )
         sub_img = self.load_img(self.path_root/'data_unilateral'/uid/'Sub.nii.gz' )
-        t2_img = self.load_img(self.path_root/'data_unilateral'/uid/'T2.nii.gz' )
+        # t2_img = self.load_img(self.path_root/'data_unilateral'/uid/'T2.nii.gz' )
 
-        mask_fg = t2_img.data[0].sum(0).sum(0)>0
+        mask_fg = dyn_img.data[0].sum(0).sum(0)>0
 
         # Crop to slices with data 
         dyn_img.set_data(dyn_img.data[:,:,:, mask_fg])
         sub_img.set_data(sub_img.data[:,:,:, mask_fg])
-        t2_img.set_data(t2_img.data[:,:,:, mask_fg])
+        # t2_img.set_data(t2_img.data[:,:,:, mask_fg])
         mask_fg = mask_fg[mask_fg]
 
         img = tio.Image(tensor=torch.cat([
             dyn_img.data[:,:,:, mask_fg],
             sub_img.data[:,:,:, mask_fg],
-            t2_img.data[:,:,:, mask_fg],
+            # t2_img.data[:,:,:, mask_fg],
         ],dim=0), affine=sub_img.affine )
         mask_fg = mask_fg[mask_fg]
 

@@ -74,7 +74,7 @@ def plot_roc_curve(y_true, y_score, axis, bootstrapping=1000, drop_intermediate=
         if isinstance(child, matplotlib.spines.Spine):
             child.set_color('#dddddd')
  
-    return tprs, fprs, auc_val, thrs, opt_idx, conf_matrix
+    return tprs, fprs, auc_val, std_auc, thrs, opt_idx, conf_matrix
 
 
 

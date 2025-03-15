@@ -1,5 +1,7 @@
 import argparse
 from pathlib import Path
+import os 
+os.environ["WANDB__SERVICE_WAIT"] = "300"
 from datetime import datetime
 import wandb 
 import torch 
@@ -28,7 +30,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default="UKA")
     parser.add_argument('--model', type=str, default="MedVLM")
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--tokenizer', type=str, default="GerMedBERT/medbert-512")
+    parser.add_argument('--tokenizer', type=str, default="GerMedBERT/medbert-512") # "GerMedBERT/medbert-512" "meta-llama/Llama-3.2-1B", google/gemma-3-1b-pt
     args = parser.parse_args()
 
     #------------ Settings/Defaults ----------------
@@ -39,11 +41,11 @@ if __name__ == "__main__":
     path_run_dir = path_run_root / 'runs' / args.dataset / f'{args.model}_{current_time}'
     path_run_dir.mkdir(parents=True, exist_ok=True)
     accelerator = 'gpu' # if torch.cuda.is_available() else 'cpu'
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision('medium')
 
     # ------------ Load Data ----------------
     tokenizer = Tokenizer(model_name=args.tokenizer)
-    ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, random_inverse=True, tokenizer=tokenizer)
+    ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
     ds_val = get_dataset(args.dataset)(split='val', tokenizer=tokenizer)
     
     samples = len(ds_train) + len(ds_val)
@@ -68,14 +70,14 @@ if __name__ == "__main__":
 
     # ------------ Initialize Model ------------
     model = MedVLM(tokenizer_y=tokenizer)
-    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_01_24_071812_fixloss/epoch=11-step=5520.ckpt', strict=False)
+    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_02_180209/epoch=8-step=4032.ckpt', strict=False)
 
     
     # -------------- Training Initialization ---------------
     to_monitor = "val/loss"
     min_max = "min"
     log_every_n_steps = 50
-    logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=f'{args.model}_{args.dataset}_{current_time}_all', log_model=False)
+    logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=f'{args.model}_{args.dataset}_{current_time}_Gemma3', log_model=False)
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping = EarlyStopping(
         monitor=to_monitor,
