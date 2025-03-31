@@ -177,7 +177,7 @@ class MST(nn.Module):
         if self.return_last_hidden_layer:
             return x 
         
-        x = self.linear(x[:, 0])
+        x = self.linear(x[:, -1])
         return x
     
 
