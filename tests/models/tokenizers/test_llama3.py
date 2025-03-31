@@ -5,7 +5,7 @@ from transformers import LlamaForCausalLM
 
 device=torch.device('cuda')
 
-tokenizer = Tokenizer()
+tokenizer = Tokenizer("meta-llama/Llama-3.2-1B")
 
 text = "Please write a report for the following patient"
 text = tokenizer.tokenizer(
