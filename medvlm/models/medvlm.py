@@ -35,8 +35,8 @@ class MedVLM(BasicVLM):
 
         # ----------------- Vision -----------------
         self.encoder = MST(backbone_type="dinov2", slice_fusion_type='none')
-        for param in self.encoder.backbone.parameters():
-            param.requires_grad = False
+        # for param in self.encoder.backbone.parameters():
+        #     param.requires_grad = False
         emb_ch = self.encoder.emb_ch 
 
         self.vision_pos_emb = nn.Embedding(32*1*6, emb_ch)
