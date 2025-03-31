@@ -12,6 +12,7 @@
 
 !requirements.txt
 !version.txt
+!pyproject.toml
 
 /docs/build
 !/docs/Makefile
@@ -21,4 +22,5 @@
 /runs 
 /results
 /wandb
+/scripts/playground
 !/media/**
