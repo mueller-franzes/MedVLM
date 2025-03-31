@@ -70,11 +70,11 @@ if __name__ == "__main__":
 
     # ------------ Initialize Model ------------
     model = MedVLM(tokenizer_y=tokenizer)
-    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_02_180209/epoch=8-step=4032.ckpt', strict=False)
+    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_16_155236/epoch=5-step=2688.ckpt', strict=False)
 
     
     # -------------- Training Initialization ---------------
-    to_monitor = "val/loss"
+    to_monitor = "val/contastive_real"
     min_max = "min"
     log_every_n_steps = 50
     logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=f'{args.model}_{args.dataset}_{current_time}_Gemma3', log_model=False)
