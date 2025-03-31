@@ -10,7 +10,7 @@ from medvlm.data.datamodule import DataModule
 from medvlm.models.tokenizer import Tokenizer
 
 
-tokenizer = Tokenizer()
+tokenizer = Tokenizer(model_name="google/gemma-3-1b-pt")
 
 # ds_test = CTRATE_Dataset3D(split='test', tokenizer=tokenizer)
 ds_test = UKA_Dataset3D(split='test', tokenizer=tokenizer)
