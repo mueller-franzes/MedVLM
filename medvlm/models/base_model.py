@@ -174,14 +174,14 @@ class BasicVLM(BasicModel):
         self, 
         tokenizer_y,
         optimizer = torch.optim.AdamW,
-        optimizer_kwargs ={'lr':5e-4},
-        lr_scheduler= lr_scheduler.LinearLR, 
-        lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':1000},
+        optimizer_kwargs ={'lr':1e-6},
+        # lr_scheduler= lr_scheduler.LinearLR, 
+        # lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':1000},
         save_hyperparameters=True
     ):
         super().__init__(optimizer, optimizer_kwargs, 
-                         lr_scheduler, 
-                         lr_scheduler_kwargs, 
+                        #  lr_scheduler, 
+                        #  lr_scheduler_kwargs, 
                          save_hyperparameters=save_hyperparameters
                          )
 
