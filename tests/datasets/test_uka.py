@@ -34,10 +34,12 @@ item = ds[20]
 uid = item["uid"]
 img = item['img']
 label = item['label']
-src_key_padding_mask = item['src_key_padding_mask']
-print(img.min(), img.max(), img.mean(), img.std())
+slice_padding_mask = img[:, :, 0, 0] == ds.SLICE_PAD_TOKEN_ID
 
-print("UID", uid, "Image Shape", list(img.shape), "Label", label, "src_key_padding_mask", src_key_padding_mask)
+
+img[slice_padding_mask] = -3
+print(img.min(), img.max(), img.mean(), img.std())
+print("UID", uid, "Image Shape", list(img.shape), "Label", label, "slice_padding_mask", slice_padding_mask)
 
 path_out = Path.cwd()/'results/tests'
 path_out.mkdir(parents=True, exist_ok=True)

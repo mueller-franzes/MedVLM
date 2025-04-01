@@ -22,9 +22,11 @@ item = ds.get_examuid('train_1_a')
 uid = item["uid"]
 img = item['img']
 label = item['label']
-print(img.min(), img.max(), img.mean(), img.std())
+slice_padding_mask = img[:, :, 0, 0] == ds.SLICE_PAD_TOKEN_ID
 
-print("UID", uid, "Image Shape", list(img.shape), "Label", label)
+img[slice_padding_mask] = -1
+print(img.min(), img.max(), img.mean(), img.std())
+print("UID", uid, "Image Shape", list(img.shape), "Label", label, "slice_padding_mask", slice_padding_mask)
 
 path_out = Path.cwd()/'results/tests'
 path_out.mkdir(parents=True, exist_ok=True)
