@@ -38,7 +38,8 @@ if __name__ == "__main__":
     # path_run_root = Path('/hpcwork/p0020933/workspace_gustav/models/medvlm')
     # path_run_root = Path('/work/gm511073/workspace_gustav/models/medvlm')
     path_run_root = Path.cwd()
-    path_run_dir = path_run_root / 'runs' / args.dataset / f'{args.model}_{current_time}'
+    run_name =  f'{args.model}_{current_time}_trainable'
+    path_run_dir = path_run_root / 'runs' / args.dataset / run_name
     path_run_dir.mkdir(parents=True, exist_ok=True)
     accelerator = 'gpu' # if torch.cuda.is_available() else 'cpu'
     torch.set_float32_matmul_precision('medium')
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     to_monitor = "val/contastive_real"
     min_max = "min"
     log_every_n_steps = 50
-    logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=f'{args.model}_{args.dataset}_{current_time}_Gemma3', log_model=False)
+    logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=run_name, log_model=False)
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping = EarlyStopping(
         monitor=to_monitor,
