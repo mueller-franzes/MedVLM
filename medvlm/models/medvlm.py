@@ -25,15 +25,16 @@ class TransformerEncoder(Encoder):
 
 
 class MedVLM(BasicVLM):
-    def __init__(self, tokenizer_y, use_llm = False):
-        super().__init__(tokenizer_y=tokenizer_y)
+    def __init__(self, tokenizer_y, use_llm = False, only_cl=False):
+        super().__init__(tokenizer_y=tokenizer_y, only_cl=only_cl)
         self.use_llm = use_llm # True: use pretrained LLM for text encoding AND multi-modal fusion 
         self.slice_pad_token_id = -1000
 
+
         # ----------------- Vision -----------------
         self.vision_encoder = MST(backbone_type="dinov2", slice_fusion_type='none')
-        for param in self.vision_encoder.backbone.parameters():
-            param.requires_grad = False
+        # for param in self.vision_encoder.backbone.parameters():
+        #     param.requires_grad = False
         emb_ch = self.vision_encoder.emb_ch 
         self.vision_pos_emb = nn.Embedding(32*1*6, emb_ch) # MAX: 32 Slices x 1 CLS Token x 6 Sequences (e.g T2, T1, Sub) 
 
@@ -226,13 +227,11 @@ class MedVLM(BasicVLM):
 
 
         # ----------------- Multi: Image -> Text -----------------  
-        # text_logits = None 
-        text_logits = self.forward_vision_text(memory, text_emb)
+        text_logits = None if self.only_cl else  self.forward_vision_text(memory, text_emb) 
         
 
-        # ----------------- Multi: Text -> Image -----------------  
-        # vision_logits = None 
-        vision_logits = self.forward_text_vision(text_emb, memory)
+        # ----------------- Multi: Text -> Image -----------------   
+        vision_logits = None if self.only_cl else self.forward_text_vision(text_emb, memory)
 
              
         return memory_cls, text_cls, text_logits, vision_logits

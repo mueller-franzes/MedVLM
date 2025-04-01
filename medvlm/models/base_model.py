@@ -177,6 +177,7 @@ class BasicVLM(BasicModel):
         optimizer_kwargs ={'lr':1e-6},
         # lr_scheduler= lr_scheduler.LinearLR, 
         # lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':1000},
+        only_cl = False, # only contrastive loss
         save_hyperparameters=True
     ):
         super().__init__(optimizer, optimizer_kwargs, 
@@ -187,6 +188,7 @@ class BasicVLM(BasicModel):
 
         self.tokenizer_y = tokenizer_y
         self.cliploss = CLIPLossA()
+        self.only_cl = only_cl 
 
         # self.ce = nn.ModuleDict({state:CrossEntropy() for state in ["train_", "val_", "test_"]}) # 'train' not allowed as key
         # self.acc = nn.ModuleDict({state:Accuracy(task='multiclass', num_classes=3) for state in ["train_", "val_", "test_"]})
@@ -206,21 +208,8 @@ class BasicVLM(BasicModel):
         memory_cls, text_cls, text_logits, vision_logits  = self.forward(img=x, text=y[:, :-1]) # [B, T, C]
 
 
-        # ------------------------- Compute Loss ---------------------------
-        # -------- Compute Cross Entropy Loss for text generation
-        # ce_text = 0
-        y = y[:, 1:] # Remove <SOS> 
-        y_pred = text_logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
-        ce_text = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
-
-        # ------- Compute Cross Entropy Loss for image generation 
-        vision_target = self.vision_emb.detach() # Ugly hack to get the target
-        log_pred = F.log_softmax(vision_logits, dim=-1)
-        vision_target = F.softmax(vision_target, dim=-1)
-        ce_vision = -torch.sum(log_pred * vision_target, dim=-1)
-        ce_vision[self._vision_padding_mask] = 0
-        ce_vision = ce_vision.mean()
-       
+        # ------------------------- Compute Loss ---------------------------  
+        loss = 0      
         # -------- Compute Contrastive Loss 
         image_embeddings = memory_cls
         text_embeddings = text_cls
@@ -236,24 +225,42 @@ class BasicVLM(BasicModel):
             text_embeddings = text_embeddings.view(-1, text_embeddings.shape[-1])
 
         contrastive_loss, _, _ = self.cliploss(image_embeddings, text_embeddings)
+        loss += contrastive_loss
 
         # Compute contrastive loss without temperature scaling
         with torch.no_grad():
             contrastive_loss_fix, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings, temperature=1)
-        
-        # -------- Total 
-        loss = contrastive_loss+ce_text+ce_vision 
 
+        # -------- Compute Cross Entropy Loss for text generation
+        if not self.only_cl:
+            # ce_text = 0
+            y = y[:, 1:] # Remove <SOS> 
+            y_pred = text_logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
+            ce_text = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
+            loss += ce_text
+
+            # ------- Compute Cross Entropy Loss for image generation 
+            vision_target = self.vision_emb.detach() # Ugly hack to get the target
+            log_pred = F.log_softmax(vision_logits, dim=-1)
+            vision_target = F.softmax(vision_target, dim=-1)
+            ce_vision = -torch.sum(log_pred * vision_target, dim=-1)
+            ce_vision[self._vision_padding_mask] = 0
+            ce_vision = ce_vision.mean()
+            loss += ce_vision
+        
+ 
 
         # ------------------- Log Scalars ----------------------
-        logging_dict['ce_text'] = ce_text
+        logging_dict['loss'] = loss
         logging_dict['contastive'] = contrastive_loss
         logging_dict['contastive_real'] = contrastive_loss_fix
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
-        logging_dict['ce_vision'] = ce_vision
-        logging_dict['loss'] = loss
+        if not self.only_cl:
+            logging_dict['ce_text'] = ce_text
+            logging_dict['ce_vision'] = ce_vision
+            
 
         # --------------------- Compute Metrics  -------------------------------
         # pred_tokens = self.logits2tokens(logits) 
