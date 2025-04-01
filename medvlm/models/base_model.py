@@ -193,51 +193,66 @@ class BasicVLM(BasicModel):
     
     def _step(self, batch: dict, batch_idx: int, state: str, step: int):
         x, y = batch['img'], batch['text']
-        src_key_padding_mask = batch['src_key_padding_mask']
-        self.batch_size = x.shape[0]  * dist.get_world_size()  # Get global batch size
+    
+        if dist.is_initialized():
+            self.batch_size = x.shape[0] * dist.get_world_size()
+        else:
+            self.batch_size = x.shape[0]  # Fallback for non-distributed mode
+ 
         logging_dict = {}
 
 
         # ------------------- Run Model --------------------------
-        memory_cls, text_cls, text_logits, vision_logits  = self.forward(img=x, text=y[:, :-1], src_key_padding_mask=src_key_padding_mask) # [B, T, C]
+        memory_cls, text_cls, text_logits, vision_logits  = self.forward(img=x, text=y[:, :-1]) # [B, T, C]
 
 
         # ------------------------- Compute Loss ---------------------------
-        # Compute Cross Entropy Loss for text generation
-        # ce = 0
+        # -------- Compute Cross Entropy Loss for text generation
+        # ce_text = 0
         y = y[:, 1:] # Remove <SOS> 
         y_pred = text_logits.transpose(1, 2) # [B, N, C] ->   [B, C, N]
-        ce = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
+        ce_text = F.cross_entropy(y_pred, y, ignore_index=self.tokenizer_y.pad_token_id) 
+
+        # ------- Compute Cross Entropy Loss for image generation 
+        vision_target = self.vision_emb.detach() # Ugly hack to get the target
+        log_pred = F.log_softmax(vision_logits, dim=-1)
+        vision_target = F.softmax(vision_target, dim=-1)
+        ce_vision = -torch.sum(log_pred * vision_target, dim=-1)
+        ce_vision[self._vision_padding_mask] = 0
+        ce_vision = ce_vision.mean()
        
-        # Compute Contrastive Loss 
+        # -------- Compute Contrastive Loss 
         image_embeddings = memory_cls
         text_embeddings = text_cls
         image_embeddings = F.normalize(image_embeddings, dim=-1)
         text_embeddings = F.normalize(text_embeddings, dim=-1)
 
         # Gather embeddings from all GPUs
-        image_embeddings = self.all_gather(image_embeddings, sync_grads=True) # [World_size, B, C]
-        text_embeddings = self.all_gather(text_embeddings, sync_grads=True)
-        # Ensure all gathered features are correctly reshaped
-        image_embeddings = image_embeddings.view(-1, image_embeddings.shape[-1]) # [World_size, B, C] -> [B*World_size, C]
-        text_embeddings = text_embeddings.view(-1, text_embeddings.shape[-1])
+        if dist.is_initialized():
+            image_embeddings = self.all_gather(image_embeddings, sync_grads=True) # [World_size, B, C]
+            text_embeddings = self.all_gather(text_embeddings, sync_grads=True)
+            # Ensure all gathered features are correctly reshaped
+            image_embeddings = image_embeddings.view(-1, image_embeddings.shape[-1]) # [World_size, B, C] -> [B*World_size, C]
+            text_embeddings = text_embeddings.view(-1, text_embeddings.shape[-1])
 
         contrastive_loss, _, _ = self.cliploss(image_embeddings, text_embeddings)
 
- 
         # Compute contrastive loss without temperature scaling
         with torch.no_grad():
             contrastive_loss_fix, texts_loss, images_loss  = self.cliploss(image_embeddings, text_embeddings, temperature=1)
         
+        # -------- Total 
+        loss = contrastive_loss+ce_text+ce_vision 
 
-        loss = ce+contrastive_loss+self.loss2 #-cs+cs2 #self.loss2
-        logging_dict['ce'] = ce
-        logging_dict['ce2'] = contrastive_loss
+
+        # ------------------- Log Scalars ----------------------
+        logging_dict['ce_text'] = ce_text
+        logging_dict['contastive'] = contrastive_loss
         logging_dict['contastive_real'] = contrastive_loss_fix
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
-        logging_dict['loss2'] = self.loss2
+        logging_dict['ce_vision'] = ce_vision
         logging_dict['loss'] = loss
 
         # --------------------- Compute Metrics  -------------------------------
