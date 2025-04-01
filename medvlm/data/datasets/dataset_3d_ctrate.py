@@ -13,6 +13,7 @@ import ast
 class CTRATE_Dataset3D(data.Dataset):
     PATH_ROOT = Path('/hpcwork/p0020933/workspace_gustav/datasets/CT-CLIP/dataset')
     PATH_ROOT_S3 = Path('CT-RATE/')
+    SLICE_PAD_TOKEN_ID = -1000
     LABELS = [
         'Medical material',
     	'Arterial wall calcification',	
@@ -65,7 +66,7 @@ class CTRATE_Dataset3D(data.Dataset):
                 tio.Resize(image_resize) if image_resize is not None else tio.Lambda(lambda x: x),
                 tio.Resample(resample) if resample is not None else tio.Lambda(lambda x: x),
                 #tio.Lambda(lambda x: x.moveaxis(1, 2)), # Just for viewing, otherwise upside down
-                CropOrPad(image_crop, random_center=random_center, mask_name='mask', padding_mode=-1000) if image_crop is not None else tio.Lambda(lambda x: x), # WARNING: Padding value also used for mask 
+                CropOrPad(image_crop, padding_position='random' if random_center else 'center', mask_name='mask', padding_mode=-1000), # WARNING: Padding value also used for mask 
 
                 tio.Clamp(*clamp),
                 RescaleIntensity((-1,1), in_min_max=clamp, per_channel=True),
@@ -148,7 +149,9 @@ class CTRATE_Dataset3D(data.Dataset):
         img = subject['img']
         mask = subject['mask']
         mask[mask<0]=0 # workaround padding -1000
-        src_key_padding_mask = ~(mask[0].sum(-1).sum(-1)>0)
+        # src_key_padding_mask = ~(mask[0].sum(-1).sum(-1)>0)
+        slice_padding_mask = ~(mask.sum(-1).sum(-1)>0)
+        img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
         # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
         label = item[self.LABEL]
         text = item['Report']
@@ -156,7 +159,7 @@ class CTRATE_Dataset3D(data.Dataset):
         if self.tokenizer is not None:
             text = self.tokenizer(text)
 
-        return {'uid':uid, 'img':img , 'text':text, 'label':label, 'src_key_padding_mask':src_key_padding_mask}
+        return {'uid':uid, 'img':img , 'text':text, 'label':label}
     
     def get_examuid(self, examuid):
         try:

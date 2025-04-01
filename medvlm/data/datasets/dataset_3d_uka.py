@@ -12,7 +12,7 @@ class UKA_Dataset3D(data.Dataset):
     # PATH_ROOT = Path.home()/'Documents/datasets/ODELIA/UKA_all'
     # PATH_ROOT = Path('/mnt/ocean_storage/users/gfranzes/UKA_Breast/')
     PATH_ROOT = Path('/mnt/datasets_gustav/UKA/')
-
+    SLICE_PAD_TOKEN_ID = -1000
     LABEL = 'Karzinom'
     LABELS = [
         'Fibroadenom', 
@@ -52,7 +52,7 @@ class UKA_Dataset3D(data.Dataset):
             self.transform = tio.Compose([
                 tio.Flip((1,0)), # Just for viewing, otherwise upside down
                 CropOrPad((256, 256, 32), padding_position='end', padding_mode=0), # WANRING: Padding mode also for LabelMap
-                CropOrPad((224, 224, 32), padding_position='random', padding_mode=0), # WANRING: Padding mode also for LabelMap
+                CropOrPad((224, 224, 32), padding_position='random' if random_center else 'center', padding_mode=0), # WANRING: Padding mode also for LabelMap
 
                 ZNormalization(per_channel=True, per_slice=False, masking_method=lambda x:(x>x.min()) & (x<x.max()), percentiles=(0.5, 99.5)), 
                 # RescaleIntensity((-2, 2), per_channel=True, per_slice=False, masking_method=lambda x:(x>x.min()) & (x<x.max()), percentiles=(0.5, 99.5)),
@@ -179,8 +179,9 @@ class UKA_Dataset3D(data.Dataset):
         # img = torch.stack([t2_img[0], dyn_img[0], dyn_img[1]-dyn_img[0], dyn_img[2]-dyn_img[0], dyn_img[3]-dyn_img[0], dyn_img[4]-dyn_img[0]], dim=0)
 
         mask_fg = sub['mask_fg']
-        src_key_padding_mask = ~(mask_fg[0].sum(-1).sum(-1)>0)
-        src_key_padding_mask = src_key_padding_mask.repeat(img.shape[0])
+        # src_key_padding_mask = ~(mask_fg[0].sum(-1).sum(-1)>0)
+        # src_key_padding_mask = src_key_padding_mask.repeat(img.shape[0])
+        slice_padding_mask = ~(mask_fg.sum(-1).sum(-1)>0)
 
         # if (self.split == 'train'): 
         #     rand_idx = torch.randperm(32)
@@ -195,10 +196,10 @@ class UKA_Dataset3D(data.Dataset):
         if self.tokenizer is not None:
             text = self.tokenizer(text)
 
-        # img[:, src_key_padding_mask] = -1000
+        img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
 
   
-        return {'uid':uid, 'img':img , 'text':text, 'label':label, 'src_key_padding_mask':src_key_padding_mask}
+        return {'uid':uid, 'img':img , 'text':text, 'label':label}
 
 
 
