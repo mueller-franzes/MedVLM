@@ -33,8 +33,8 @@ class MedVLM(BasicVLM):
 
         # ----------------- Vision -----------------
         self.vision_encoder = MST(backbone_type="dinov2", slice_fusion_type='none')
-        # for param in self.vision_encoder.backbone.parameters():
-        #     param.requires_grad = False
+        for param in self.vision_encoder.backbone.parameters():
+            param.requires_grad = False
         emb_ch = self.vision_encoder.emb_ch 
         self.vision_pos_emb = nn.Embedding(32*1*6, emb_ch) # MAX: 32 Slices x 1 CLS Token x 6 Sequences (e.g T2, T1, Sub) 
 
