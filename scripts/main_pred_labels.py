@@ -28,7 +28,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default="UKA")
     parser.add_argument('--model', type=str, default="MedVLM")
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--path_run', type=str, default="runs/UKA/MedVLM_2025_03_08_121508_batch64/last.ckpt")
+    parser.add_argument('--path_run', type=str, default="runs/UKA/MedVLM_2025_04_01_183114_Llama/epoch=94-step=42560.ckpt")
     args = parser.parse_args()
 
     path_run = Path(args.path_run)
@@ -64,7 +64,6 @@ if __name__ == "__main__":
         # Iterate over the dataloader
         for batch in tqdm(dl, total=len(ds_test)//batch_size):
             imgs = batch['img'].to(device)
-            src_key_padding_masks = batch['src_key_padding_mask'].to(device)
             labels = batch['label']
 
             # Prepare text prompts
@@ -74,9 +73,9 @@ if __name__ == "__main__":
             text = torch.stack([text1, text2])[:, :-1].to(device) # Remove the last token (eos)
 
             with torch.no_grad():
-                probs = model.compute_similiarty(text, imgs, src_key_padding_masks)
+                probs = model.compute_similiarty(text, imgs)
 
-                # probs, weight_slice = model.compute_similiarty_attention(text, imgs, src_key_padding_masks)
+                # probs, weight_slice = model.compute_similiarty_attention(text, imgs)
                 # weight_slice = weight_slice.unsqueeze(-1).unsqueeze(-1).expand(imgs.shape) # [B, C, D] -> [B, C, D, H, W]
                 # save_image(tensor_cam2image(minmax_norm(imgs[:, 1:2].cpu()), minmax_norm(weight_slice[:, 1:2].cpu()), alpha=0.5), 
                 #         path_out_weight/f"overlay_{batch['uid'][0]}_{label_name}_slice.png", normalize=False)

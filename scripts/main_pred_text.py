@@ -25,8 +25,7 @@ device=torch.device(f'cuda:{best_gpu_index}')
 path_run = Path('runs/UKA/MedVLM_2025_03_07_135708_withCoCo_Vision_LLama/epoch=11-step=5376.ckpt')
 model = MedVLM.load_from_checkpoint(path_run)
 model.to(device)
-# model.eval()
-model.save_attn = False
+model.eval()
 
 
 # --------------------- Load the dataset ---------------------
@@ -51,8 +50,7 @@ for batch in tqdm(dl, total=len(ds_test)//batch_size):
     img = batch['img'].to(device)
     text = tokenizer.decode(batch['text'])
     uid = batch['uid'] 
-    src_key_padding_mask = batch['src_key_padding_mask'].to(device)
-    pred_text = model.generate(img=img, src_key_padding_mask=src_key_padding_mask, top_k=1)
+    pred_text = model.generate(img=img, top_k=1)
     
     
     # -------------- Store results
