@@ -3,7 +3,7 @@ from typing import Iterable, Tuple, Union, List, Optional, Sequence, Dict
 from numbers import Number
 import nibabel as nib 
 import numpy as np
-from torchio.typing import TypeRangeFloat, TypeTripletInt
+from torchio.types import TypeRangeFloat, TypeTripletInt
 from torchio.transforms.transform import TypeMaskingMethod 
 from torchio import Subject, Image
 import torch 
