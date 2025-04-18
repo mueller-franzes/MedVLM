@@ -11,7 +11,8 @@ import numpy as np
 import ast 
 
 class CTRATE_Dataset3D(data.Dataset):
-    PATH_ROOT = Path('/hpcwork/p0020933/workspace_gustav/datasets/CT-CLIP/dataset')
+    # PATH_ROOT = Path('/hpcwork/p0020933/workspace_gustav/datasets/CT-CLIP/dataset')
+    PATH_ROOT = Path('/hpcwork/p0021834/datasets/CT-RATE/')
     PATH_ROOT_S3 = Path('CT-RATE/')
     SLICE_PAD_TOKEN_ID = -1000
     LABELS = [
@@ -52,7 +53,7 @@ class CTRATE_Dataset3D(data.Dataset):
             random_inverse=False,
             random_noise=False, 
             to_tensor = True,
-            use_s3=True,
+            use_s3=False,
             return_labels=False,
             tokenizer=None,
         ):
@@ -88,28 +89,44 @@ class CTRATE_Dataset3D(data.Dataset):
             self.bucket = init_bucket() 
 
         # Get split file 
-        path_csv = self.path_root/'preprocessed/splits/split.csv'
+        # path_csv = self.path_root/'preprocessed/splits/split.csv'
+        path_csv = self.path_root/'download/split.csv'
         if use_s3:
             path_csv = load_bytesio(self.bucket, str(path_csv)) 
         df = self.load_split(path_csv, fold=fold, split=split, fraction=fraction)
         
-        # Get reports 
+        # Get reports
+        # Loads all reports, train, valid and test. Then split.csv is used to only keep correct split and fold. (merge(how='inner')) 
+        path_report_csv = self.path_root/'download/radiology_text_reports/validation_reports.csv' if split == 'test' else self.path_root/'download/radiology_text_reports/train_reports.csv'
+        df_reports = pd.read_csv(path_report_csv)
+        df_reports.set_index('VolumeName')
+        """
         df_reports = []
         for report_split in ['train', 'validation']:
-            path_csv = self.path_root/f'download/radiology_text_reports/{report_split}_reports.csv'
+            path_report_csv = self.path_root/f'download/radiology_text_reports/{report_split}_reports.csv'
             if use_s3:
-                path_csv = load_bytesio(self.bucket, str(path_csv)) 
+                path_report_csv = load_bytesio(self.bucket, str(path_csv)) 
             df_reports.append(pd.read_csv(path_csv))
         df_reports = pd.concat(df_reports).set_index('VolumeName')
+        """
         self.df_reports = df_reports
-
         # df_reports = df_reports[~df_reports['Impressions_EN'].isna()] # 28 cases 
         # df_reports[~(df_reports['Findings_EN'].isna() & df_reports['Impressions_EN'].isna()) ] # = 0 cases 
         df_reports['Report'] = df_reports['Findings_EN'].fillna("")+df_reports['Impressions_EN'].fillna("")
         # df_reports = df_reports[df_reports['Report'].apply(lambda x: (tokenizer(x)[0].nonzero().max()<511).item())] # ~2000
 
+        #Get labels
+        path_label_csv = self.path_root/'download/multi_abnormality_labels/valid_predicted_labels.csv' if split == 'test' else self.path_root/'download/multi_abnormality_labels/train_predicted_labels.csv'
+        df_label = pd.read_csv(path_label_csv)
+        df_label['Labels'] = df_label[self.LABELS].values.tolist()
+        df_label = df_label.drop(columns = self.LABELS)
+        df_label.set_index('VolumeName')
+
+        #TODO: Load metadata
+
         # Merge
         df = pd.merge(df, df_reports, how='inner', on='VolumeName')
+        df = pd.merge(df, df_label, how='inner', on='VolumeName')
         self.df = df.set_index('ExamUID', drop=True)
         self.item_pointers = self.df.index.tolist()
 
@@ -153,13 +170,14 @@ class CTRATE_Dataset3D(data.Dataset):
         slice_padding_mask = ~(mask.sum(-1).sum(-1)>0)
         img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
         # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
-        label = item[self.LABEL]
+        # label = item[self.LABEL] 
+        labels = item['Labels']
         text = item['Report']
 
         if self.tokenizer is not None:
             text = self.tokenizer(text)
 
-        return {'uid':uid, 'img':img , 'text':text, 'label':label}
+        return {'uid':uid, 'img':img , 'text':text, 'label':labels}
     
     def get_examuid(self, examuid):
         try:

@@ -48,7 +48,8 @@ if __name__ == "__main__":
     tokenizer = Tokenizer(model_name=args.tokenizer)
     ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
     ds_val = get_dataset(args.dataset)(split='val', tokenizer=tokenizer)
-    
+    ds_test = get_dataset(args.dataset)(split='test', tokenizer=tokenizer)
+
     samples = len(ds_train) + len(ds_val)
     batch_size = args.batch_size #1 if args.dataset == 'CTRATE' else 2
     accumulate_grad_batches = 1 #2 if args.dataset == 'CTRATE' else 1
