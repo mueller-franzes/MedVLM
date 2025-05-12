@@ -44,9 +44,9 @@ class CTRATE_Dataset3D(data.Dataset):
             fraction=None,
             transform = None,
             clamp=(-1000, 1000), 
-            image_resize = None,# (224,224,96),
-            resample=None, # Paper (0.75, 0.75, 1.5)
-            image_crop = (420, 308, 210), # Paper: 480 × 480 × 240, NOTE: Must be a multiplier of 14 for Dino
+            image_resize = (350, 350, 140), #None,# (224,224,96), #original shape 456,456,212
+            resample=None, # Paper (0.75, 0.75, 1.5), preprocessed data already is resampled
+            image_crop = (224, 224, 140), #(420, 308, 210) used before, but to big for vision encoder, # Paper: 480 × 480 × 240, NOTE: Must be a multiplier of 14 for Dino
             random_flip = False,
             random_rotate=False,
             random_center=False,
@@ -56,17 +56,21 @@ class CTRATE_Dataset3D(data.Dataset):
             use_s3=False,
             return_labels=False,
             tokenizer=None,
+            use_extern_preprocess=True,
         ):
         self.path_root = Path((self.PATH_ROOT_S3 if use_s3 else self.PATH_ROOT)if path_root is None else path_root)
         self.path_root_prep = self.path_root/'preprocessed_resample'
         self.tokenizer = tokenizer 
         self.return_labels = return_labels
+        self.use_extern_preprocess = use_extern_preprocess
 
         if transform is None: 
             self.transform = tio.Compose([
                 tio.Resize(image_resize) if image_resize is not None else tio.Lambda(lambda x: x),
                 tio.Resample(resample) if resample is not None else tio.Lambda(lambda x: x),
                 #tio.Lambda(lambda x: x.moveaxis(1, 2)), # Just for viewing, otherwise upside down
+
+                #Use mask as spatial guide to crop/center such that lung regions stay within crop
                 CropOrPad(image_crop, padding_position='random' if random_center else 'center', mask_name='mask', padding_mode=-1000), # WARNING: Padding value also used for mask 
 
                 tio.Clamp(*clamp),
@@ -90,7 +94,7 @@ class CTRATE_Dataset3D(data.Dataset):
 
         # Get split file 
         # path_csv = self.path_root/'preprocessed/splits/split.csv'
-        path_csv = self.path_root/'download/split.csv'
+        path_csv = self.path_root/'download/split_2.csv'
         if use_s3:
             path_csv = load_bytesio(self.bucket, str(path_csv)) 
         df = self.load_split(path_csv, fold=fold, split=split, fraction=fraction)
@@ -128,7 +132,9 @@ class CTRATE_Dataset3D(data.Dataset):
         df = pd.merge(df, df_reports, how='inner', on='VolumeName')
         df = pd.merge(df, df_label, how='inner', on='VolumeName')
         self.df = df.set_index('ExamUID', drop=True)
-        self.item_pointers = self.df.index.tolist()
+        item_pointers = self.df.index.tolist()
+        self.item_pointers = list(dict.fromkeys(item_pointers)) 
+        
 
         # Remove S3 
         if use_s3:
@@ -150,11 +156,15 @@ class CTRATE_Dataset3D(data.Dataset):
         folder, patientid, examid = examuid.split('_')
         subfolder = f'{folder}_{patientid}'
         uid = f'{examuid}_{1}' # Always picks the first scan: choose between 1 and 'NumberReconstructions'
-
+        #TODO: Adapt split.csv and creation of dataset to include multiple reconstructions
+        
         if self.use_s3:
             if not hasattr(self, "bucket"):
                 self.bucket = init_bucket() 
 
+        if not self.use_extern_preprocess:
+            raise NotImplementedError('Data preprocessing during runtime is not implemented. Prepare data by applying rescaling, clipping and resampling')
+        
         path_item = self.path_root_prep/'data'/folder/subfolder/examuid
         img = self.load_img(path_item/f'{uid}.nii.gz')
         seg_lung = self.load_map(path_item/f'seg_lung.nii.gz')
@@ -167,13 +177,12 @@ class CTRATE_Dataset3D(data.Dataset):
         mask = subject['mask']
         mask[mask<0]=0 # workaround padding -1000
         # src_key_padding_mask = ~(mask[0].sum(-1).sum(-1)>0)
-        slice_padding_mask = ~(mask.sum(-1).sum(-1)>0)
+        slice_padding_mask = ~(mask.sum(-1).sum(-1)>0) #True means slice i is empty and should be treated as padding
         img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
         # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
         # label = item[self.LABEL] 
         labels = item['Labels']
         text = item['Report']
-
         if self.tokenizer is not None:
             text = self.tokenizer(text)
 
