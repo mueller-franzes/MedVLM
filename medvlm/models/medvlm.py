@@ -4,12 +4,16 @@ from .mst import MST
 import torch 
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast #Save memory by applying float16 where possible
 from transformers import AutoModel
 from x_transformers import Encoder
-from transformers import LlamaModel, LlamaTokenizer, LlamaForCausalLM, Gemma3ForCausalLM
+from transformers import LlamaModel, LlamaTokenizer, LlamaForCausalLM, Gemma3ForCausalLM, BertModel
 import math 
 from .utils.functions import combine_padding_and_attention_masks
 from tqdm import tqdm
+
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1" #For debugging
 
 
 class TransformerEncoder(Encoder):
@@ -25,18 +29,43 @@ class TransformerEncoder(Encoder):
 
 
 class MedVLM(BasicVLM):
-    def __init__(self, tokenizer_y, use_llm = False, only_cl=False):
+    def __init__(
+            self, 
+            tokenizer_y,
+            data_type = "MRI", 
+            use_llm = False, 
+            only_cl=False, 
+            backbone_type = "dinov2",
+            model_size = "s", # 34, 50, ... or 's', 'b', 'l'
+            text_encoder = None
+            ):
+        if data_type == "MRI":
+            text_encoder=text_encoder if text_encoder else "GerMedBERT/medbert-512"
+            # tokenizer_y = tokenizer_y if tokenizer_y else "GerMedBERT/medbert-512"
+        elif data_type == "CT":
+            text_encoder=text_encoder if text_encoder else "microsoft/BiomedVLP-CXR-BERT-specialized"
+            # tokenizer_y = tokenizer_y if tokenizer_y else "microsoft/BiomedVLP-CXR-BERT-specialized"
+        else:
+            raise(NotImplementedError)
         super().__init__(tokenizer_y=tokenizer_y, only_cl=only_cl)
         self.use_llm = use_llm # True: use pretrained LLM for text encoding AND multi-modal fusion 
         self.slice_pad_token_id = -1000
 
 
         # ----------------- Vision -----------------
-        self.vision_encoder = MST(backbone_type="dinov2", slice_fusion_type='none')
+        self.vision_encoder = MST(backbone_type=backbone_type, slice_fusion_type='none', model_size=model_size)
         for param in self.vision_encoder.backbone.parameters():
             param.requires_grad = False
-        emb_ch = self.vision_encoder.emb_ch 
-        self.vision_pos_emb = nn.Embedding(32*1*6, emb_ch) # MAX: 32 Slices x 1 CLS Token x 6 Sequences (e.g T2, T1, Sub) 
+        emb_ch = self.vision_encoder.emb_ch #384
+        if data_type == "CT":
+            MAX_SLICES = 140 #maybe change to 210 later
+            NUM_MODALITIES = 1
+        else:
+            NUM_MODALITIES = 6 #(e.g., T1, T2...)
+            MAX_SLICES = 32 
+
+        self.vision_pos_emb = nn.Embedding(MAX_SLICES*NUM_MODALITIES*1, emb_ch)  #slices * modalities * 1 CLS token
+        #TODO: Add interpolation support for positional embedding to handle variable slice count
 
         # ----------------- Text -----------------
         if not use_llm:
@@ -49,7 +78,8 @@ class MedVLM(BasicVLM):
             # self.text_vision_proj.weight.requires_grad = False
 
             # ------ Use pretrained BERT -------
-            model = AutoModel.from_pretrained("GerMedBERT/medbert-512")
+            model = BertModel.from_pretrained(text_encoder)
+
             for model.param in model.parameters():
                 model.param.requires_grad = False
             self.text_encoder = model.embeddings.word_embeddings
@@ -61,7 +91,7 @@ class MedVLM(BasicVLM):
         if use_llm:
             self.multi_encoder = LlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
             # self.multi_encoder = Gemma3ForCausalLM.from_pretrained("google/gemma-3-1b-pt", torch_dtype=torch.bfloat16) 
-            for param in self.multi_encoder.parameters():
+            for param in self.multi_encoder.parameters(): #freeze model
                 param.requires_grad = False
             self.text_encoder = self.multi_encoder.model.embed_tokens # Note: pos_encoder already included in text_encoderr 
             self.text_vision_proj = nn.Linear(self.text_encoder.embedding_dim, emb_ch, bias=False)
@@ -97,20 +127,22 @@ class MedVLM(BasicVLM):
     def forward_vision(self, img, mask_slice_i=None):
         B = img.size(0) # expect img to be of shape [B, C, D, H, W]       
         cls_padding = torch.zeros((B, 1), device=img.device).bool()
-
+       
         # ------------ Get Vision Embeddings ------------
         vision_emb = self.vision_encoder(img) # [B, C, D, H, W] -> [B, C*D, E]
+        vision_emb = vision_emb.float()
         self.vision_emb = vision_emb # save for later 
         
         # ------------ Prepare Embeddings and Masks ------------
         self.slice_padding_mask = img[:, :, :, 0, 0] == self.slice_pad_token_id # -> [B, C, D]
         self.slice_padding_mask = self.slice_padding_mask.view(B, -1) # -> [B, C*D]
 
-        vision_emb = vision_emb + self.vision_pos_emb(torch.arange(vision_emb.size(1), device=img.device))
+        vision_pos_emb = self.vision_pos_emb(torch.arange(vision_emb.size(1), device=img.device))
+        vision_emb = vision_emb + vision_pos_emb
         vision_emb = torch.cat([vision_emb, self.cls_emb.repeat(B, 1, 1)], dim=1)
         
         vision_padding_mask = torch.cat([self.slice_padding_mask, cls_padding], dim=1) 
-        mask = torch.triu(torch.ones(vision_emb.size(1), vision_emb.size(1), device=vision_emb.device), diagonal=1).bool()
+        mask = torch.triu(torch.ones(vision_emb.size(1), vision_emb.size(1), device=vision_emb.device, dtype=torch.float32), diagonal=1).bool()
         if mask_slice_i is not None:
             mask[mask_slice_i, :] = True
         
@@ -139,7 +171,7 @@ class MedVLM(BasicVLM):
         text_emb = self.text_encoder(text) # [B, L] -> [B, L, E]
 
         text_padding_mask = text == self.tokenizer_y.pad_token_id
-        self.text_padding_mask = text_padding_mask
+        self.text_padding_mask = text_padding_mask #masks tells where there are text tokens and where padding tokens
         text_padding_mask = torch.cat([text_padding_mask, cls_padding], dim=1)
         mask = torch.triu(torch.ones(text.size(1)+1, text.size(1)+1, device=text.device), diagonal=1).bool()
 
@@ -152,7 +184,7 @@ class MedVLM(BasicVLM):
             text_emb = self.text_vision_proj(text_emb.to(cls_emb.dtype))
             
         else:
-            text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device))
+            text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device)) #Does shape change here?
             text_emb = self.text_vision_proj(text_emb)
             text_emb = torch.cat([text_emb, self.cls_emb.repeat(B, 1, 1)], dim=1)
 
@@ -218,12 +250,12 @@ class MedVLM(BasicVLM):
         
 
     def forward(self, img, text):    
-
+        # with autocast():
         # ----------------- Vision -----------------
-        memory_cls, memory = self.forward_vision(img)
+        memory_cls, memory = self.forward_vision(img) #memory_cls: [1,384]
         
         # ----------------- Text -----------------
-        text_cls, text_emb = self.forward_text(text)
+        text_cls, text_emb = self.forward_text(text) #text_cls: [1,384]
 
 
         # ----------------- Multi: Image -> Text -----------------  

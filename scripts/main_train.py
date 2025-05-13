@@ -30,7 +30,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default="UKA")
     parser.add_argument('--model', type=str, default="MedVLM")
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--tokenizer', type=str, default="GerMedBERT/medbert-512") # "GerMedBERT/medbert-512" "meta-llama/Llama-3.2-1B", google/gemma-3-1b-pt
+    parser.add_argument('--tokenizer', type=str, default=None) 
     args = parser.parse_args()
 
     #------------ Settings/Defaults ----------------
@@ -44,8 +44,19 @@ if __name__ == "__main__":
     accelerator = 'gpu' # if torch.cuda.is_available() else 'cpu'
     torch.set_float32_matmul_precision('medium')
 
+    #CTRATE
+    use_llm = False if args.dataset == "CTRATE" else True
+
+    if args.dataset == "UKA":
+        tokenizer = args.tokenizer if args.tokenizer else "GerMedBERT/medbert-512"
+        #other options: "meta-llama/Llama-3.2-1B", google/gemma-3-1b-pt
+    elif args.dataset == "CTRATE":
+        tokenizer = args.tokenizer if args.tokenizer else "microsoft/BiomedVLP-CXR-BERT-specialized"
+    else:
+        raise(NotImplementedError)
+
     # ------------ Load Data ----------------
-    tokenizer = Tokenizer(model_name=args.tokenizer)
+    tokenizer = Tokenizer(tokenizer)
     ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
     ds_val = get_dataset(args.dataset)(split='val', tokenizer=tokenizer)
     ds_test = get_dataset(args.dataset)(split='test', tokenizer=tokenizer)
@@ -66,17 +77,18 @@ if __name__ == "__main__":
         batch_size=batch_size, 
         pin_memory=True,
         # weights=weights,
-        num_workers=16,#args.batch_size,
+        num_workers= 16,#args.batch_size,
         # num_train_samples=min(len(ds_train), 2000) # WARNING: Ignored for DDP 
     )
 
     # ------------ Initialize Model ------------
-    model = MedVLM(tokenizer_y=tokenizer)
+    model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized"
+               )
     # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_16_155236/epoch=5-step=2688.ckpt', strict=False)
 
     
     # -------------- Training Initialization ---------------
-    to_monitor = "val/contastive_real"
+    to_monitor = "val/contrastive_real"
     min_max = "min"
     log_every_n_steps = 50
     logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=run_name, log_model=False)
@@ -100,7 +112,7 @@ if __name__ == "__main__":
         precision='16-mixed',
         # gradient_clip_val =0.5,
         # replace_sampler_ddp=True, # WARNING: For DDP: Random DDP Sample is used unless set True here 
-        strategy=DDPStrategy(static_graph=True), # static_graph=True required if gradient checkpoint is used  
+        # strategy=DDPStrategy(static_graph=True), # static_graph=True required if gradient checkpoint is used  #disable for debug, activate for training
         default_root_dir=str(path_run_dir),
         callbacks=[checkpointing, lr_monitor], # early_stopping
         enable_checkpointing=True,
@@ -111,7 +123,10 @@ if __name__ == "__main__":
         limit_train_batches =  0.5 if args.dataset=="CTRATE" else None,
         # max_epochs=1,
         num_sanity_val_steps=2,
-        logger=logger
+        logger=logger,
+        # fast_dev_run=True, #debug
+        devices=1, #only for debug, remove for actual training
+        max_steps=2 #debug
     )
 
     # ---------------- Execute Training ----------------
