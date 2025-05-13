@@ -122,8 +122,8 @@ class CTRATE_Dataset3D(data.Dataset):
         #Get labels
         path_label_csv = self.path_root/'download/multi_abnormality_labels/valid_predicted_labels.csv' if split == 'test' else self.path_root/'download/multi_abnormality_labels/train_predicted_labels.csv'
         df_label = pd.read_csv(path_label_csv)
-        df_label['Labels'] = df_label[self.LABELS].values.tolist()
-        df_label = df_label.drop(columns = self.LABELS)
+        # df_label['Labels'] = df_label[self.LABELS].values.tolist()
+        # df_label = df_label.drop(columns = self.LABELS)
         df_label.set_index('VolumeName')
 
         #TODO: Load metadata
@@ -180,13 +180,14 @@ class CTRATE_Dataset3D(data.Dataset):
         slice_padding_mask = ~(mask.sum(-1).sum(-1)>0) #True means slice i is empty and should be treated as padding
         img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
         # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
-        # label = item[self.LABEL] 
-        labels = item['Labels']
+
+        label = item[self.LABEL] #TODO: This should be used, as in predict label, the label being evalued is set as self.LABEL
+        # labels = item['Labels']
         text = item['Report']
         if self.tokenizer is not None:
             text = self.tokenizer(text)
 
-        return {'uid':uid, 'img':img , 'text':text, 'label':labels}
+        return {'uid':uid, 'img':img , 'text':text, 'label':label}
     
     def get_examuid(self, examuid):
         try:
