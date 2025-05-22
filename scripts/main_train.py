@@ -10,6 +10,9 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.strategies import DDPStrategy
+from transformers import AutoTokenizer
+from torch.optim.adamw import AdamW
+from torch.optim.lr_scheduler import LinearLR
 
 from medvlm.models.tokenizer import Tokenizer
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
@@ -77,13 +80,20 @@ if __name__ == "__main__":
         batch_size=batch_size, 
         pin_memory=True,
         # weights=weights,
-        num_workers= 16,#args.batch_size,
+        num_workers= 12,#args.batch_size,
         # num_train_samples=min(len(ds_train), 2000) # WARNING: Ignored for DDP 
     )
 
     # ------------ Initialize Model ------------
-    model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized"
-               )
+    # model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized")
+    
+    #------------ Load Model -----------------
+    path_run = "/home/ve001107/MedVLM/MedVLM/runs/CTRATE/MedVLM_2025_05_14_173217_trainable/last.ckpt"
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+    CXRBertTokenizer = type(tokenizer)
+    torch.serialization.add_safe_globals([CXRBertTokenizer, AdamW, LinearLR, Tokenizer])
+    model = MedVLM.load_from_checkpoint(path_run, strict=False)
+
     # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_16_155236/epoch=5-step=2688.ckpt', strict=False)
 
     
@@ -99,22 +109,29 @@ if __name__ == "__main__":
         patience=50,
         mode=min_max
     )
-    checkpointing = ModelCheckpoint(
+    checkpointing_best = ModelCheckpoint(
         dirpath=str(path_run_dir),
         monitor=to_monitor,
         save_last=True,
         save_top_k=1,
         mode=min_max,
+        filename="best-{epoch:02d}-{val_loss:.2f}",
     )
+    checkpointing_periodic = ModelCheckpoint(
+    dirpath=str(path_run_dir),
+    save_top_k=-1, 
+    every_n_train_steps=600,
+    filename="step-{step}",
+    )  
     trainer = Trainer(
         accelerator=accelerator,
         accumulate_grad_batches=accumulate_grad_batches,
         precision='16-mixed',
         # gradient_clip_val =0.5,
         # replace_sampler_ddp=True, # WARNING: For DDP: Random DDP Sample is used unless set True here 
-        # strategy=DDPStrategy(static_graph=True), # static_graph=True required if gradient checkpoint is used  #disable for debug, activate for training
+        strategy=DDPStrategy(static_graph=True), # static_graph=True required if gradient checkpoint is used  #disable for debug, activate for training
         default_root_dir=str(path_run_dir),
-        callbacks=[checkpointing, lr_monitor], # early_stopping
+        callbacks=[checkpointing_best, checkpointing_periodic, lr_monitor], # early_stopping
         enable_checkpointing=True,
         check_val_every_n_epoch=1,
         log_every_n_steps=log_every_n_steps,
@@ -124,15 +141,14 @@ if __name__ == "__main__":
         # max_epochs=1,
         num_sanity_val_steps=2,
         logger=logger,
-        # fast_dev_run=True, #debug
-        devices=1, #only for debug, remove for actual training
-        max_steps=2 #debug
+        # devices=1, #only for debug, remove for actual training
+        # max_steps=2 #debug
     )
 
     # ---------------- Execute Training ----------------
     trainer.fit(model, datamodule=dm)
 
     # ------------- Save path to best model -------------
-    # model.save_best_checkpoint(path_run_dir, checkpointing.best_model_path)
+    model.save_best_checkpoint(path_run_dir, checkpointing_best.best_model_path)
 
     wandb.finish(quiet=True)

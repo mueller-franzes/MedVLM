@@ -1,5 +1,5 @@
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, BertModel
 import pandas as pd
 from tqdm import tqdm
 from pathlib import Path 
@@ -13,6 +13,10 @@ from medvlm.models.tokenizer import Tokenizer
 from medvlm.utils.gpu import get_gpu_with_max_free_memory
 from torchvision.utils import save_image
 from medvlm.models.utils.functions import tensor2image, tensor_cam2image, minmax_norm, one_hot, tensor_mask2image
+
+from torch.optim.adamw import AdamW
+from torch.optim.lr_scheduler import LinearLR
+from medvlm.models.tokenizer import Tokenizer
 
 def get_dataset(name):
     if name == 'CTRATE':
@@ -39,8 +43,13 @@ if __name__ == "__main__":
     device=torch.device(f'cuda:{best_gpu_index}')
 
     # Load the model
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+    CXRBertTokenizer = type(tokenizer)
+    torch.serialization.add_safe_globals([CXRBertTokenizer, AdamW, LinearLR, Tokenizer])
+
+    # ckpt = torch.load(args.path_run, weights_only=False)
     model = MedVLM.load_from_checkpoint(path_run, strict=False)
-    model.to(device)
+    model.to(device, non_blocking=True)
     model.eval()
 
     # Load the dataset
@@ -63,12 +72,17 @@ if __name__ == "__main__":
 
         # Iterate over the dataloader
         for batch in tqdm(dl, total=len(ds_test)//batch_size):
-            imgs = batch['img'].to(device)
+            imgs = batch['img'].to(device, non_blocking=True)
             labels = batch['label']
 
             # Prepare text prompts
-            text1 = tokenizer(f"Kein {ds_test.LABEL}") # No or Kein [512,]
-            text2 = tokenizer(f"{ds_test.LABEL}")
+            if args.dataset == "UKA":
+                text1 = tokenizer(f"Kein {ds_test.LABEL}") # No or Kein [512,]
+                text2 = tokenizer(f"{ds_test.LABEL}")
+            else:
+                text1 = tokenizer(f"{ds_test.LABEL} is not present")
+                text2 = tokenizer(f"{ds_test.LABEL} is present")
+
 
             text = torch.stack([text1, text2])[:, :-1].to(device) # Remove the last token (eos)
 

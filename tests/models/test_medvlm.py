@@ -1,6 +1,7 @@
 import torch
 from medvlm.models.tokenizer import Tokenizer
 from medvlm.models.medvlm import MedVLM
+from medvlm.utils.gpu import get_gpu_with_max_free_memory
 
 
 # ---- Pseudo image ---------
@@ -14,7 +15,8 @@ text_tokens = tokenizer(text)[None] # [B, 7]
 
 # ---- Model ---------
 model = MedVLM(tokenizer_y=tokenizer)
-device=torch.device('cuda:8')
+best_gpu_index, max_free_memory = get_gpu_with_max_free_memory()
+device=torch.device(f'cuda:{best_gpu_index}')
 model.to(device)
 
 # ---- Number of parameters ---------

@@ -184,7 +184,7 @@ class MedVLM(BasicVLM):
             text_emb = self.text_vision_proj(text_emb.to(cls_emb.dtype))
             
         else:
-            text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device)) #Does shape change here?
+            text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device))
             text_emb = self.text_vision_proj(text_emb)
             text_emb = torch.cat([text_emb, self.cls_emb.repeat(B, 1, 1)], dim=1)
 
@@ -250,7 +250,6 @@ class MedVLM(BasicVLM):
         
 
     def forward(self, img, text):    
-        # with autocast():
         # ----------------- Vision -----------------
         memory_cls, memory = self.forward_vision(img) #memory_cls: [1,384]
         

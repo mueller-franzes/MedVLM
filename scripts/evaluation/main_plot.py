@@ -8,16 +8,19 @@ import numpy as np
 from medvlm.utils.roc_curve import plot_roc_curve
 
 from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
+from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 
 # ------------------------------- Settings ---------------------------------
-path_run_dir = Path('runs/UKA/MedVLM_2025_03_16_155236')
+path_run_dir = Path('/home/ve001107/MedVLM/MedVLM/runs/CTRATE/MedVLM_2025_05_14_173217_trainable')
+# path_run_dir = Path('runs/UKA/MedVLM_2025_03_16_155236')
+
 path_out = Path.cwd()/'results'/path_run_dir.name
 path_out.mkdir(parents=True, exist_ok=True)
 
 fontdict = {'fontsize': 11, 'fontweight': 'bold'}
 
 results = []
-for label in  UKA_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
+for label in  CTRATE_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
     print("-------------------", label, "-------------------")
     result = {'Label': label}
 
@@ -52,6 +55,7 @@ for label in  UKA_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
     fig.savefig(path_out/f'confusion_matrix_{label}.png', dpi=300)
 
     results.append(result)
+    plt.close()
 
 df = pd.DataFrame(results)
 df.to_csv(path_out/'results_summary.csv', index=False)

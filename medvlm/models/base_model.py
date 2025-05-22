@@ -162,6 +162,7 @@ class BasicVLM(BasicModel):
         # -------- Compute Contrastive Loss 
         image_embeddings = memory_cls
         text_embeddings = text_cls
+        #TODO: check if cls can be deleted to free memory
         image_embeddings = F.normalize(image_embeddings, dim=-1)
         text_embeddings = F.normalize(text_embeddings, dim=-1)
 
@@ -201,8 +202,8 @@ class BasicVLM(BasicModel):
 
         # ------------------- Log Scalars ----------------------
         logging_dict['loss'] = loss
-        logging_dict['contastive'] = contrastive_loss
-        logging_dict['contastive_real'] = contrastive_loss_fix
+        logging_dict['contrastive'] = contrastive_loss
+        logging_dict['contrastive_real'] = contrastive_loss_fix
         logging_dict['image2text'] = images_loss
         logging_dict['text2image'] = texts_loss
         logging_dict['temperature'] = self.cliploss.logit_scale.exp()
