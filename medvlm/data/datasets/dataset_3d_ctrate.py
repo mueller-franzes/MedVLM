@@ -44,7 +44,7 @@ class CTRATE_Dataset3D(data.Dataset):
             fraction=None,
             transform = None,
             clamp=(-1000, 1000), 
-            image_resize = (350, 350, 140), #None,# (224,224,96), #original shape 456,456,212
+            image_resize = (224, 224, 140), #None, #original shape 456,456,212
             resample=None, # Paper (0.75, 0.75, 1.5), preprocessed data already is resampled
             image_crop = (224, 224, 140), #(420, 308, 210) used before, but to big for vision encoder, # Paper: 480 × 480 × 240, NOTE: Must be a multiplier of 14 for Dino
             random_flip = False,
@@ -94,9 +94,11 @@ class CTRATE_Dataset3D(data.Dataset):
 
         # Get split file 
         # path_csv = self.path_root/'preprocessed/splits/split.csv'
-        path_csv = self.path_root/'download/split_2.csv'
+        path_csv = self.path_root/'download/split_3.csv' #use 2 for complete test set
         if use_s3:
-            path_csv = load_bytesio(self.bucket, str(path_csv)) 
+            path_csv = load_bytesio(self.bucket, str(path_csv))
+        if split=="val":
+            split = "valid" 
         df = self.load_split(path_csv, fold=fold, split=split, fraction=fraction)
         
         # Get reports

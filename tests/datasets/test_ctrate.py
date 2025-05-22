@@ -31,17 +31,11 @@ if test_single_item:
     text = item['text']
     slice_padding_mask = img[:, :, 0, 0] == ds.SLICE_PAD_TOKEN_ID
 
-   
-
-    # save_image(tensor2image(img[None]) , path_out/'test_no_mask.png', normalize=True) #normalization doesn't make sense since there are many slices with -1000, where there is padding
-
     img[slice_padding_mask] = -1
     print(img.min(), img.max(), img.mean(), img.std())
     print("UID", uid, "Image Shape", list(img.shape), "Label", label, "slice_padding_mask", slice_padding_mask)
 
-
     save_image(tensor2image(img[None]) , path_out/'test_rescale_4a.png', normalize=True)
-    # save_image(tensor2image(item['mask'][None]), path_out/'mask.png', normalize=True)
     # save_image(tensor_mask2image(img[None], one_hot(item['mask'], 3), alpha=0.25), path_out/'overlay.png', normalize=False)
 if test_all_items:
     for index in ds.item_pointers:
@@ -57,4 +51,3 @@ if test_all_items:
                 save_image(tensor2image(img[None]) , path_out/file_name, normalize=True)
         except:
             print("UID ", uid, "cannot be opened")
-
