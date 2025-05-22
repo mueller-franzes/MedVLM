@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.models as models
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast #Save memory by applying float16 where possible
 from transformers import Dinov2Config, Dinov2Model
 import x_transformers
 
@@ -129,14 +130,15 @@ class MST(nn.Module):
         if self.backbone_type in ["mve3D"]:
             x = rearrange(x, 'b c d h w -> (b c) 1 d h w')
         else:
-            x = rearrange(x, 'b c d h w -> (b c d) h w')
+            x = rearrange(x, 'b c d h w -> (b c d) h w') #Flatten 3D volume into 2D slices
             x = x[:, None]
 
         if self.backbone_type in ["resnet", "dinov2"]:
             x = x.repeat(1, 3, 1, 1) # Gray to RGB
-
-        x = self.backbone(x)
-        # x = checkpoint(self.backbone, x.requires_grad_())
+        # with autocast():
+        # x = self.backbone(x)
+        #TODO: specify whether training or not
+        x = checkpoint(self.backbone, x.requires_grad_())
         # x = checkpoint(self.backbone.encode, x.requires_grad_())
         # x = self.backbone(x, is_training=True)['x_norm_patchtokens']
 
