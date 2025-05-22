@@ -23,6 +23,7 @@ dependencies = [
     "transformers==4.50.3",
     "vector_quantize_pytorch==1.22.4",
     "x-transformers==2.2.11",
+    "xformers",
 ]
 dynamic = ["description", "readme", "authors"]
 [tool.setuptools.packages.find]
