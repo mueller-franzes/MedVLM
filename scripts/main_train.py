@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.strategies import DDPStrategy
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, BertTokenizer
 from torch.optim.adamw import AdamW
 from torch.optim.lr_scheduler import LinearLR
 
@@ -19,6 +19,8 @@ from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 from medvlm.data.datamodule import DataModule
 from medvlm.models.medvlm import MedVLM
+
+import random
 
 def get_dataset(name):
     if name == 'CTRATE':
@@ -33,7 +35,9 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default="UKA")
     parser.add_argument('--model', type=str, default="MedVLM")
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--tokenizer', type=str, default=None) 
+    parser.add_argument('--tokenizer', type=str, default=None)
+    parser.add_argument('--resume_from_ckpt', type=str, default=None)
+    parser.add_argument('--len_dataset', type=int, default=0) 
     args = parser.parse_args()
 
     #------------ Settings/Defaults ----------------
@@ -46,23 +50,28 @@ if __name__ == "__main__":
     path_run_dir.mkdir(parents=True, exist_ok=True)
     accelerator = 'gpu' # if torch.cuda.is_available() else 'cpu'
     torch.set_float32_matmul_precision('medium')
-
     #CTRATE
     use_llm = False if args.dataset == "CTRATE" else True
 
     if args.dataset == "UKA":
         tokenizer = args.tokenizer if args.tokenizer else "GerMedBERT/medbert-512"
+        tokenizer = Tokenizer(tokenizer)
         #other options: "meta-llama/Llama-3.2-1B", google/gemma-3-1b-pt
     elif args.dataset == "CTRATE":
         tokenizer = args.tokenizer if args.tokenizer else "microsoft/BiomedVLP-CXR-BERT-specialized"
+        tokenizer = BertTokenizer(tokenizer)
     else:
         raise(NotImplementedError)
+    
+    notes = f"Arguments: {args}\nTokenizer: {tokenizer}\n"
 
     # ------------ Load Data ----------------
-    tokenizer = Tokenizer(tokenizer)
     ds_train = get_dataset(args.dataset)(split='train', random_flip=True, random_noise=True, random_center=True, random_rotate=True, tokenizer=tokenizer)
     ds_val = get_dataset(args.dataset)(split='val', tokenizer=tokenizer)
     ds_test = get_dataset(args.dataset)(split='test', tokenizer=tokenizer)
+    if args.len_dataset > 0:
+        ds_train.item_pointers = random.sample(ds_train.item_pointers, args.len_dataset)
+        ds_val.item_pointers = random.sample(ds_val.item_pointers, int(args.len_dataset/2) )
 
     samples = len(ds_train) + len(ds_val)
     batch_size = args.batch_size #1 if args.dataset == 'CTRATE' else 2
@@ -85,17 +94,8 @@ if __name__ == "__main__":
     )
 
     # ------------ Initialize Model ------------
-    # model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized")
-    
-    #------------ Load Model -----------------
-    path_run = "/home/ve001107/MedVLM/MedVLM/runs/CTRATE/MedVLM_2025_05_14_173217_trainable/last.ckpt"
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
-    CXRBertTokenizer = type(tokenizer)
-    torch.serialization.add_safe_globals([CXRBertTokenizer, AdamW, LinearLR, Tokenizer])
-    model = MedVLM.load_from_checkpoint(path_run, strict=False)
-
-    # model = MedVLM.load_from_checkpoint('runs/UKA/MedVLM_2025_03_16_155236/epoch=5-step=2688.ckpt', strict=False)
-
+    model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True) #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized")
+    notes += str(model.__dict__)
     
     # -------------- Training Initialization ---------------
     to_monitor = "val/contrastive_real"
@@ -115,7 +115,7 @@ if __name__ == "__main__":
         save_last=True,
         save_top_k=1,
         mode=min_max,
-        filename="best-{epoch:02d}-{val_loss:.2f}",
+        filename="best-{epoch:02d}-{val/contrastive_real:.2f}",
     )
     checkpointing_periodic = ModelCheckpoint(
     dirpath=str(path_run_dir),
@@ -137,7 +137,7 @@ if __name__ == "__main__":
         log_every_n_steps=log_every_n_steps,
         limit_val_batches=min(len(ds_val), 200),
         # limit_val_batches = 0,
-        limit_train_batches =  0.5 if args.dataset=="CTRATE" else None,
+        limit_train_batches =  0.5 if args.dataset=="CTRATE" and args.len_dataset==0 else None, #len_dataset default is 0, dataset is not cut
         # max_epochs=1,
         num_sanity_val_steps=2,
         logger=logger,
@@ -145,8 +145,10 @@ if __name__ == "__main__":
         # max_steps=2 #debug
     )
 
+    with open(str(path_run_dir)+'/notes.txt', 'a') as f:
+        f.write(notes)
     # ---------------- Execute Training ----------------
-    trainer.fit(model, datamodule=dm)
+    trainer.fit(model, datamodule=dm, ckpt_path=args.resume_from_ckpt)
 
     # ------------- Save path to best model -------------
     model.save_best_checkpoint(path_run_dir, checkpointing_best.best_model_path)

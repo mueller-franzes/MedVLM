@@ -68,11 +68,11 @@ class DataModule(pl.LightningDataModule):
         raise AssertionError("A validation set was not initialized.")
 
 
-    def test_dataloader(self):
+    def test_dataloader(self, shuffle=False):
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         if self.ds_test is not None:
-            return DataLoader(self.ds_test, batch_size=self.batch_size_test, num_workers=self.num_workers, shuffle=False, 
+            return DataLoader(self.ds_test, batch_size=self.batch_size_test, num_workers=self.num_workers, shuffle=shuffle, 
                             generator = generator, drop_last=False, pin_memory=self.pin_memory)
        
         raise AssertionError("A test test set was not initialized.")

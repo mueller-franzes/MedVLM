@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 import  torch.optim.lr_scheduler as lr_scheduler
 import torch.distributed as dist
+import numpy as np
 
 
 from .utils.losses import CLIPLoss
@@ -51,6 +52,19 @@ class VeryBasicModel(pl.LightningModule):
     def on_test_epoch_end(self, outputs) -> None:
         self._epoch_end("test")
 
+    def compute_grad_norm(self, model):
+        # total_norm_sq = 0.0
+        # for param in module.parameters():
+        #     if param.grad is not None:
+        #         total_norm_sq += param.grad.norm(2).item() ** 2
+        # return total_norm_sq ** 0.5
+        norms = []
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                norms.append(param.grad.norm().item())
+        norms = np.array(norms)
+        norm = np.mean(norms) if norms.any() else 0
+        return norm
 
     @classmethod
     def save_best_checkpoint(cls, path_checkpoint_dir, best_model_path):
@@ -123,7 +137,9 @@ class BasicVLM(BasicModel):
         optimizer = torch.optim.AdamW,
         optimizer_kwargs ={'lr':5e-4},
         lr_scheduler= lr_scheduler.LinearLR, 
+        # lr_scheduler= lr_scheduler.CosineAnnealingWarmRestarts, 
         lr_scheduler_kwargs={'start_factor':1e-3, 'total_iters':1000},
+        # lr_scheduler_kwargs={'T_0':5000, 'T_mult':2},
         only_cl = False, # only contrastive loss
         save_hyperparameters=True
     ):
@@ -211,6 +227,20 @@ class BasicVLM(BasicModel):
             logging_dict['ce_text'] = ce_text
             logging_dict['ce_vision'] = ce_vision
             
+        # --------------------- Log Gradients ----------------------------------
+        if state=="train":
+            grad_norms = {}            
+            grad_norms['cls_emb'] = self.cls_emb.grad.norm().item() if (self.cls_emb.grad is not None) else 0
+            grad_norms['cls_logits'] = self.cls_logits.weight.grad.norm().item() if self.cls_logits.weight.grad is not None else 0
+            grad_norms['cliploss_logit_scale'] = self.cliploss.logit_scale.grad.norm().item() if self.cliploss.logit_scale.grad is not None else 0
+            grad_norms['vision_pos_emb'] = self.vision_pos_emb.weight.grad.norm().item() if self.vision_pos_emb.weight.grad is not None else 0
+            grad_norms['text_vision_proj'] = self.text_vision_proj.weight.grad.norm().item() if self.text_vision_proj.weight.grad is not None else 0
+            grad_norms['vision'] = self.compute_grad_norm(self.vision_encoder.backbone)
+            grad_norms['multi_encoder'] = self.compute_grad_norm(self.multi_encoder)
+            for metric_name, metric_val in grad_norms.items():
+                self.log(f"grad_norm/{metric_name}", metric_val.detach() if hasattr(metric_val, "detach") else metric_val,
+                         batch_size=self.batch_size, on_step=True, on_epoch=True, prog_bar=metric_name=="loss", sync_dist=True)               
+             
 
         # --------------------- Compute Metrics  -------------------------------
         # pred_tokens = self.logits2tokens(logits) 
@@ -223,9 +253,8 @@ class BasicVLM(BasicModel):
             # ----------------- Log Scalars ----------------------
             for metric_name, metric_val in logging_dict.items():
                 self.log(f"{state}/{metric_name}", metric_val.detach() if hasattr(metric_val, "detach") else metric_val,
-                         batch_size=self.batch_size, on_step=True, on_epoch=True, prog_bar=metric_name=="loss", sync_dist=True) 
-
-
+                         batch_size=self.batch_size, on_step=True, on_epoch=True, prog_bar=metric_name=="loss", sync_dist=True)               
+            
         return logging_dict['loss'] 
 
 

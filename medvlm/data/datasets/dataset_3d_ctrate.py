@@ -94,7 +94,7 @@ class CTRATE_Dataset3D(data.Dataset):
 
         # Get split file 
         # path_csv = self.path_root/'preprocessed/splits/split.csv'
-        path_csv = self.path_root/'download/split_3.csv' #use 2 for complete test set
+        path_csv = self.path_root/'download/split_4.csv' #use 2 for complete test set, 4 for all valid samples in test set
         if use_s3:
             path_csv = load_bytesio(self.bucket, str(path_csv))
         if split=="val":
@@ -183,8 +183,7 @@ class CTRATE_Dataset3D(data.Dataset):
         img[slice_padding_mask] = self.SLICE_PAD_TOKEN_ID
         # assert ~src_key_padding_mask.all(), "All tokens have been marked as padding tokens"
 
-        label = item[self.LABEL] #TODO: This should be used, as in predict label, the label being evalued is set as self.LABEL
-        # labels = item['Labels']
+        label = item[self.LABEL]
         text = item['Report']
         if self.tokenizer is not None:
             text = self.tokenizer(text)
