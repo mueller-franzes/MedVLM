@@ -2,6 +2,7 @@ import torch
 import gc
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 import pandas as pd
+from tqdm import tqdm
 
 def print_mem(stage=""):
     device = torch.device("cuda:3")
@@ -52,12 +53,15 @@ def get_mask_max(ds, examuid):
     path_item = ds.path_root_prep/'data'/folder/subfolder/examuid
     # img = ds.load_img(path_item/f'{uid}.nii.gz')
     seg_lung = ds.load_map(path_item/f'seg_lung.nii.gz')
+    img = ds.load_img(path_item/f'{uid}.nii.gz')
     tensor = seg_lung.data
+    tensor_img = img.data
     tensor = tensor.squeeze(0)
     coords = tensor.nonzero(as_tuple=False)
     shape = torch.tensor(tensor.shape, dtype=torch.float32)
     min_coords = coords.min(dim=0).values.float()/shape
     max_coords = coords.max(dim=0).values.float()/shape
+    del seg_lung, img, tensor, tensor_img
     return min_coords, max_coords
 
 
@@ -76,7 +80,7 @@ def find_faulty_samples():
     global_max = torch.tensor([-float('inf')] * 3)
     faulty_files = []
     df = pd.DataFrame(columns=["VolumeName","UID","ExamUID","PatientUID","Split","Fold"])
-    for index in ds.item_pointers:
+    for index in tqdm(ds.item_pointers, total=len(ds.item_pointers)):
         try:
             min_coords_temp, max_coords_temp = get_mask_max(ds, index)
             global_min = torch.min(global_min, min_coords_temp)
@@ -85,8 +89,8 @@ def find_faulty_samples():
             split = index.split('_')
             row = [f"{index}_1.nii.gz", f"{index}_1", index, f"{split[0]}_{split[1]}", "test", '0']
             df.loc[len(df)]=row
-            if len(df)>300:
-                break
+            # if len(df)>300:
+            #     break
         except RuntimeError:
             faulty_files.append(index)
             
@@ -96,3 +100,5 @@ def find_faulty_samples():
 
     df.to_csv(path+'download/valid_not_defect.csv', index=False)
     # VolumeName,UID,ExamUID,PatientUID,Split,Fold
+
+# find_faulty_samples()

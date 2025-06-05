@@ -45,9 +45,9 @@ if test_all_items:
             img = item['img']
             slice_padding_mask = img[:, :, 0, 0] == ds.SLICE_PAD_TOKEN_ID
             img[slice_padding_mask] = -1
-            if not slice_padding_mask.any():
-                print("UID: ", uid, "Padding mask is false for all slices.")
-                file_name = f"test_rescale_{uid}.png"
-                save_image(tensor2image(img[None]) , path_out/file_name, normalize=True)
+            # if not slice_padding_mask.any():
+            #     print("UID: ", uid, "Padding mask is false for all slices.")
+            #     file_name = f"test_rescale_{uid}.png"
+            #     save_image(tensor2image(img[None]) , path_out/file_name, normalize=True)
         except:
             print("UID ", uid, "cannot be opened")

@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from torch.cuda.amp import autocast #Save memory by applying float16 where possible
-from transformers import AutoModel
+from transformers import AutoModel#, CXRBertModel, CXRBertTokenizer
 from x_transformers import Encoder
 from transformers import LlamaModel, LlamaTokenizer, LlamaForCausalLM, Gemma3ForCausalLM, BertModel
 import math 
@@ -77,13 +77,20 @@ class MedVLM(BasicVLM):
             # nn.init.eye_(self.text_vision_proj.weight)
             # self.text_vision_proj.weight.requires_grad = False
 
-            # ------ Use pretrained BERT -------
-            model = BertModel.from_pretrained(text_encoder)
+            # ------ Use pretrained BERT embeddings-------
+            # model = BertModel.from_pretrained(text_encoder)
+            # # model = AutoModel.from_pretrained(text_encoder, trust_remote_code=True)
+            # for model.param in model.parameters():
+            #     model.param.requires_grad = False
+            # self.text_encoder = model.embeddings.word_embeddings
+            # #CT Clip uses text_encoder = BertModel.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized"), not only the embedding            
+            # self.pos_encoder = model.embeddings.position_embeddings
 
-            for model.param in model.parameters():
-                model.param.requires_grad = False
-            self.text_encoder = model.embeddings.word_embeddings
-            self.pos_encoder = model.embeddings.position_embeddings
+            # ------ Use pretrained BERT embeddings-------
+            model = BertModel.from_pretrained(text_encoder)
+            self.text_encoder = model
+            self.pos_encoder = nn.Embedding()
+
             self.text_vision_proj = nn.Linear(self.text_encoder.embedding_dim, emb_ch, bias=False) # (eg. BERT 768 vs DINO-s 384)
 
 
@@ -271,24 +278,28 @@ class MedVLM(BasicVLM):
     
 
     def compute_similiarty(self, text, imgs, return_cls=False):
+        num_img = imgs.size(0) #B Batchsize
+        num_text = text.size(0)
+        
         # Vision 
         vision_cls, _ = self.forward_vision(imgs)
         vision_cls = F.normalize(vision_cls, dim=-1) # [B, 384]
-        vision_cls = vision_cls.repeat_interleave(2, dim=0) # [2*B, 384]
+        vision_cls = vision_cls.repeat_interleave(num_text, dim=0) # [num_text*B, 384]
 
         # Text
         text_cls, _ = self.forward_text(text) #[2, 1, 384]
         text_cls = F.normalize(text_cls, dim=-1) #[2, 384]
-        text_cls = text_cls.repeat(imgs.size(0), 1) # [2*B, 384]
+        text_cls = text_cls.repeat(num_img, 1) # [num_text*B, 384]
 
         # Calculate logits and probabilities for each image against both text prompts
         temperature = self.cliploss.logit_scale.exp()
-        logits = torch.sum(vision_cls * text_cls, dim=-1).view(-1, 2) * temperature
-        pred = logits.softmax(dim=-1)
+        logits = torch.sum(vision_cls * text_cls, dim=-1).view(-1, num_text) * temperature #.view reshapes into num_text columns, for prediction num_text =2
+        pred_i2t = logits.softmax(dim=-1) #Softmax along row, compared fixed image to different texts
+        pred_t2i = logits.softmax(dim=0) #Softmax along column, compare fixed text to different images
 
         if return_cls:
-            return pred, vision_cls, text_cls
-        return pred 
+            return pred_i2t, pred_t2i, vision_cls, text_cls
+        return pred_i2t, pred_t2i 
     
     def compute_similiarty_attention(self, text, imgs):
         ref_pred, _, text_cls = self.compute_similiarty(text, imgs, return_cls=True)

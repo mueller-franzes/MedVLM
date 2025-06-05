@@ -3,7 +3,6 @@ import torch.nn as nn
 import torchvision.models as models
 from einops import rearrange
 from torch.utils.checkpoint import checkpoint
-from torch.cuda.amp import autocast #Save memory by applying float16 where possible
 from transformers import Dinov2Config, Dinov2Model
 import x_transformers
 

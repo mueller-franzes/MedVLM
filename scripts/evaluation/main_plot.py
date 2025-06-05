@@ -11,7 +11,7 @@ from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 
 # ------------------------------- Settings ---------------------------------
-path_run_dir = Path('/home/ve001107/MedVLM/MedVLM/runs/CTRATE/MedVLM_2025_05_14_173217_trainable')
+path_run_dir = Path('/home/ve001107/MedVLM/runs/CTRATE/MedVLM_2025_05_28_040836_trainable/best-epoch=36-val/')
 # path_run_dir = Path('runs/UKA/MedVLM_2025_03_16_155236')
 
 path_out = Path.cwd()/'results'/path_run_dir.name

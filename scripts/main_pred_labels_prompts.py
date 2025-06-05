@@ -44,6 +44,7 @@ if __name__ == "__main__":
 
     # Load the model
     if args.dataset == "UKA":
+        raise(NotImplementedError)
         tokenizer = AutoTokenizer.from_pretrained("GerMedBERT/medbert-512")
     elif args.dataset == "CTRATE":
         tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
@@ -61,54 +62,50 @@ if __name__ == "__main__":
     # ds_test = get_dataset(args.dataset)(split='train', tokenizer=tokenizer)
     # ds_test.item_pointers = ds_test.item_pointers[:1000]
 
+
     # Iterate over all labels
     for label_name in  ds_test.LABELS[:]: # ds_test.LABELS[:]
         ds_test.LABEL = label_name
+        #Text Prompts:
+        texts = [[f"{ds_test.LABEL} is not present", f"{ds_test.LABEL} is present"],
+                 [f"{ds_test.LABEL} was not observed", f"{ds_test.LABEL} was observed"],
+                 [f"{ds_test.LABEL} was not detected", f"{ds_test.LABEL} was detected"],
+                 [f"No significant {ds_test.LABEL} detected", f"Significant {ds_test.LABEL} detected"],
+                 [f"No significant {ds_test.LABEL} detected", f"{ds_test.LABEL} was observed"]
+                 ]
+        for j, prompt in enumerate(texts):
+            # Set up the dataloader
+            batch_size=args.batch_size
+            dm = DataModule(ds_test=ds_test, batch_size=batch_size, num_workers=16)
+            dl = dm.test_dataloader()
 
+            # Prepare storage for results
+            results = []
 
-        # Set up the dataloader
-        batch_size=args.batch_size
-        dm = DataModule(ds_test=ds_test, batch_size=batch_size, num_workers=16)
-        dl = dm.test_dataloader()
+            # Iterate over the dataloader
+            for batch in tqdm(dl, total=len(ds_test)//batch_size):
+                imgs = batch['img'].to(device, non_blocking=True)
+                labels = batch['label']
 
-        # Prepare storage for results
-        results = []
+                # Prepare text prompts
+                text1 = tokenizer(prompt[0])
+                text2 = tokenizer(prompt[1])
+                text = torch.stack([text1, text2])[:, :-1].to(device) # Remove the last token (eos)
 
-        # Iterate over the dataloader
-        for batch in tqdm(dl, total=len(ds_test)//batch_size):
-            imgs = batch['img'].to(device, non_blocking=True)
-            labels = batch['label']
+                with torch.no_grad():
+                    probs, probs_t2i = model.compute_similiarty(text, imgs)
 
-            # Prepare text prompts
-            if args.dataset == "UKA":
-                text1 = tokenizer(f"Kein {ds_test.LABEL}") # No or Kein [512,]
-                text2 = tokenizer(f"{ds_test.LABEL}")
-            else:
-                text1 = tokenizer(f"{ds_test.LABEL} is not present")
-                text2 = tokenizer(f"{ds_test.LABEL} is present")
+                    # Store results
+                    for i, label in enumerate(labels):
+                        results.append({
+                            'UID': batch['uid'][i],
+                            "GT": label.item(),
+                            "Pred": probs[i].argmax().cpu().item(),
+                            "Prob": probs[i, 1].cpu().item(),
+                        })
 
+            # Save results to a CSV file
+            results_df = pd.DataFrame(results)
+            results_df.to_csv(path_out/f"predictions_{ds_test.LABEL}_{j}.csv", index=False)
 
-            text = torch.stack([text1, text2])[:, :-1].to(device) # Remove the last token (eos)
-
-            with torch.no_grad():
-                probs, probs_t2i = model.compute_similiarty(text, imgs)
-
-                # probs, weight_slice = model.compute_similiarty_attention(text, imgs)
-                # weight_slice = weight_slice.unsqueeze(-1).unsqueeze(-1).expand(imgs.shape) # [B, C, D] -> [B, C, D, H, W]
-                # save_image(tensor_cam2image(minmax_norm(imgs[:, 1:2].cpu()), minmax_norm(weight_slice[:, 1:2].cpu()), alpha=0.5), 
-                #         path_out_weight/f"overlay_{batch['uid'][0]}_{label_name}_slice.png", normalize=False)
-
-                # Store results
-                for i, label in enumerate(labels):
-                    results.append({
-                        'UID': batch['uid'][i],
-                        "GT": label.item(),
-                        "Pred": probs[i].argmax().cpu().item(),
-                        "Prob": probs[i, 1].cpu().item(),
-                    })
-
-        # Save results to a CSV file
-        results_df = pd.DataFrame(results)
-        results_df.to_csv(path_out/f"predictions_{ds_test.LABEL}.csv", index=False)
-
-        print("Predictions saved to predictions.csv")
+            print("Predictions saved to predictions.csv")
