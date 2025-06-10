@@ -5,7 +5,7 @@ from torchvision.utils import save_image
 from medvlm.models.utils.functions import tensor2image, tensor_mask2image, one_hot
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 
-split = 'test' #'train'
+split = 'train' #'train'
 ds = CTRATE_Dataset3D(
     split=split,
     # flip=True, 
@@ -16,8 +16,8 @@ ds = CTRATE_Dataset3D(
 )
 
 print("Dataset Length", len(ds))
-test_single_item = False
-test_all_items = True
+test_single_item = True
+test_all_items = False
 
 path_out = Path.cwd()/'results/tests'
 path_out.mkdir(parents=True, exist_ok=True)

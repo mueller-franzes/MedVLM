@@ -53,11 +53,6 @@ class VeryBasicModel(pl.LightningModule):
         self._epoch_end("test")
 
     def compute_grad_norm(self, model):
-        # total_norm_sq = 0.0
-        # for param in module.parameters():
-        #     if param.grad is not None:
-        #         total_norm_sq += param.grad.norm(2).item() ** 2
-        # return total_norm_sq ** 0.5
         norms = []
         for name, param in model.named_parameters():
             if param.grad is not None:
@@ -235,8 +230,12 @@ class BasicVLM(BasicModel):
             grad_norms['cliploss_logit_scale'] = self.cliploss.logit_scale.grad.norm().item() if self.cliploss.logit_scale.grad is not None else 0
             grad_norms['vision_pos_emb'] = self.vision_pos_emb.weight.grad.norm().item() if self.vision_pos_emb.weight.grad is not None else 0
             grad_norms['text_vision_proj'] = self.text_vision_proj.weight.grad.norm().item() if self.text_vision_proj.weight.grad is not None else 0
+            grad_norms['text_encoder']= self.text_encoder.weight.grad.norm() if self.text_encoder.weight.grad is not None else 0
             grad_norms['vision'] = self.compute_grad_norm(self.vision_encoder.backbone)
-            grad_norms['multi_encoder'] = self.compute_grad_norm(self.multi_encoder)
+            if self.multi_encoder is not None:
+                grad_norms['multi_encoder'] = self.compute_grad_norm(self.multi_encoder)
+            if self.vision_to_latent is not None:
+                grad_norms['vision_to_latent'] = self.vision_to_latent.weight.grad.norm().item() if self.vision_to_latent.weight.grad is not None else 0
             for metric_name, metric_val in grad_norms.items():
                 self.log(f"grad_norm/{metric_name}", metric_val.detach() if hasattr(metric_val, "detach") else metric_val,
                          batch_size=self.batch_size, on_step=True, on_epoch=True, prog_bar=metric_name=="loss", sync_dist=True)               
