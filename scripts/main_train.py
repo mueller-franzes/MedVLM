@@ -38,6 +38,7 @@ if __name__ == "__main__":
     parser.add_argument('--tokenizer', type=str, default=None)
     parser.add_argument('--resume_from_ckpt', type=str, default=None)
     parser.add_argument('--len_dataset', type=int, default=0) 
+    parser.add_argument('--no_multiencoder', action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     #------------ Settings/Defaults ----------------
@@ -59,7 +60,8 @@ if __name__ == "__main__":
         #other options: "meta-llama/Llama-3.2-1B", google/gemma-3-1b-pt
     elif args.dataset == "CTRATE":
         tokenizer = args.tokenizer if args.tokenizer else "microsoft/BiomedVLP-CXR-BERT-specialized"
-        tokenizer = BertTokenizer(tokenizer)
+        tokenizer = Tokenizer(tokenizer)
+        # tokenizer = BertTokenizer.from_pretrained(tokenizer)
     else:
         raise(NotImplementedError)
     
@@ -94,7 +96,7 @@ if __name__ == "__main__":
     )
 
     # ------------ Initialize Model ------------
-    model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True) #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized")
+    model = MedVLM(tokenizer_y=tokenizer, data_type="CT", use_llm=use_llm, only_cl=True, use_multiencoder=(not args.no_multiencoder)) #, backbone_type="resnet", model_size=34, text_encoder="microsoft/BiomedVLP-CXR-BERT-specialized")
     notes += str(model.__dict__)
     
     # -------------- Training Initialization ---------------
@@ -102,6 +104,7 @@ if __name__ == "__main__":
     min_max = "min"
     log_every_n_steps = 50
     logger = WandbLogger(project=f'MedVLM', group=args.dataset, name=run_name, log_model=False)
+    logger.watch(model, log="all")
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping = EarlyStopping(
         monitor=to_monitor,
@@ -121,7 +124,7 @@ if __name__ == "__main__":
     dirpath=str(path_run_dir),
     save_top_k=-1, 
     every_n_train_steps=600,
-    filename="step-{step}",
+    filename="{step}",
     )  
     trainer = Trainer(
         accelerator=accelerator,

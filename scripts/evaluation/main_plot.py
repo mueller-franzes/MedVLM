@@ -11,10 +11,10 @@ from medvlm.data.datasets.dataset_3d_uka import UKA_Dataset3D
 from medvlm.data.datasets.dataset_3d_ctrate import CTRATE_Dataset3D
 
 # ------------------------------- Settings ---------------------------------
-path_run_dir = Path('/home/ve001107/MedVLM/runs/CTRATE/MedVLM_2025_05_28_040836_trainable/best-epoch=36-val/')
+path_run_dir = Path('/home/ve001107/MedVLM/runs/CTRATE/MedVLM_2025_05_25_150747_trainable/best-epoch=20-val')
 # path_run_dir = Path('runs/UKA/MedVLM_2025_03_16_155236')
 
-path_out = Path.cwd()/'results'/path_run_dir.name
+path_out = Path.cwd()/'results'/(path_run_dir.name+'_promptD')
 path_out.mkdir(parents=True, exist_ok=True)
 
 fontdict = {'fontsize': 11, 'fontweight': 'bold'}
@@ -25,8 +25,10 @@ for label in  CTRATE_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
     result = {'Label': label}
 
     # Read csv with predictions
-    df = pd.read_csv(path_run_dir/'results'/f'predictions_{label}.csv')
-
+    try:
+        df = pd.read_csv(path_run_dir/'results'/f'predictions_{label}.csv')
+    except(FileNotFoundError):
+        continue
 
     # ------------------------------- ROC-AUC ---------------------------------
     fig, axis = plt.subplots(ncols=1, nrows=1, figsize=(4,4)) 
@@ -58,4 +60,4 @@ for label in  CTRATE_Dataset3D.LABELS[:]: # UKA_Dataset3D.LABELS[:]
     plt.close()
 
 df = pd.DataFrame(results)
-df.to_csv(path_out/'results_summary.csv', index=False)
+df.to_csv(path_out/'results_summary_promptD.csv', index=False)

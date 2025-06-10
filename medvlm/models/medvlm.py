@@ -37,7 +37,8 @@ class MedVLM(BasicVLM):
             only_cl=False, 
             backbone_type = "dinov2",
             model_size = "s", # 34, 50, ... or 's', 'b', 'l'
-            text_encoder = None
+            text_encoder = None,
+            use_multiencoder = True
             ):
         if data_type == "MRI":
             text_encoder=text_encoder if text_encoder else "GerMedBERT/medbert-512"
@@ -77,25 +78,29 @@ class MedVLM(BasicVLM):
             # nn.init.eye_(self.text_vision_proj.weight)
             # self.text_vision_proj.weight.requires_grad = False
 
-            # ------ Use pretrained BERT embeddings-------
-            # model = BertModel.from_pretrained(text_encoder)
-            # # model = AutoModel.from_pretrained(text_encoder, trust_remote_code=True)
+            # ------ Use pretrained BERT embeddings -------
+            model = BertModel.from_pretrained(text_encoder)
             # for model.param in model.parameters():
             #     model.param.requires_grad = False
-            # self.text_encoder = model.embeddings.word_embeddings
-            # #CT Clip uses text_encoder = BertModel.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized"), not only the embedding            
-            # self.pos_encoder = model.embeddings.position_embeddings
+            self.text_encoder = model.embeddings.word_embeddings
+            self.pos_encoder = model.embeddings.position_embeddings
 
-            # ------ Use pretrained BERT embeddings-------
-            model = BertModel.from_pretrained(text_encoder)
-            self.text_encoder = model
-            self.pos_encoder = nn.Embedding()
+            # ------ Use pretrained BERT -------
+            # self.text_encoder = BertModel.from_pretrained(text_encoder)
+            # self.text_encoder.embedding_dim = 512
+            # self.pos_encoder = None
+            #This doesn't work, because it returns BaseModelOutput consisting of Last hidden State and pooler outputs
 
+            #Layer to match text embedding dimension to image embedding
             self.text_vision_proj = nn.Linear(self.text_encoder.embedding_dim, emb_ch, bias=False) # (eg. BERT 768 vs DINO-s 384)
 
 
         # ----------------- Multi -----------------
+        self.use_multiencoder = use_multiencoder
+        self.vision_to_latent = None
         if use_llm:
+            if not use_multiencoder:
+                raise NotImplementedError
             self.multi_encoder = LlamaForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
             # self.multi_encoder = Gemma3ForCausalLM.from_pretrained("google/gemma-3-1b-pt", torch_dtype=torch.bfloat16) 
             for param in self.multi_encoder.parameters(): #freeze model
@@ -105,7 +110,7 @@ class MedVLM(BasicVLM):
             self.lm_head =  self.multi_encoder.lm_head # last hidden layer output to logits
             self.multi_encoder.lm_head = nn.Identity() # Remove head to get last hidden layer output 
 
-        else:
+        elif not use_llm and use_multiencoder:
             config = {
                 "dim": emb_ch,
                 "heads": 12,
@@ -118,6 +123,10 @@ class MedVLM(BasicVLM):
                 "rotary_pos_emb": True
             }
             self.multi_encoder = TransformerEncoder(**config)
+        else:
+            self.multi_encoder = None
+            #add normalization
+            self.vision_to_latent = nn.Linear(emb_ch, emb_ch, bias=False)
 
 
         # ---------------- Other -----------------
@@ -136,7 +145,7 @@ class MedVLM(BasicVLM):
         cls_padding = torch.zeros((B, 1), device=img.device).bool()
        
         # ------------ Get Vision Embeddings ------------
-        vision_emb = self.vision_encoder(img) # [B, C, D, H, W] -> [B, C*D, E]
+        vision_emb = self.vision_encoder(img) # [B, C, D, H, W] -> [B, C*D, E] with E = emb_ch = 384
         vision_emb = vision_emb.float()
         self.vision_emb = vision_emb # save for later 
         
@@ -146,25 +155,28 @@ class MedVLM(BasicVLM):
 
         vision_pos_emb = self.vision_pos_emb(torch.arange(vision_emb.size(1), device=img.device))
         vision_emb = vision_emb + vision_pos_emb
-        vision_emb = torch.cat([vision_emb, self.cls_emb.repeat(B, 1, 1)], dim=1)
+        vision_emb = torch.cat([vision_emb, self.cls_emb.repeat(B, 1, 1)], dim=1) # [B, D+1, E]
         
-        vision_padding_mask = torch.cat([self.slice_padding_mask, cls_padding], dim=1) 
-        mask = torch.triu(torch.ones(vision_emb.size(1), vision_emb.size(1), device=vision_emb.device, dtype=torch.float32), diagonal=1).bool()
+        vision_padding_mask = torch.cat([self.slice_padding_mask, cls_padding], dim=1) # [B, D+1]
+        mask = torch.triu(torch.ones(vision_emb.size(1), vision_emb.size(1), device=vision_emb.device, dtype=torch.float32), diagonal=1).bool() # [D+1, D+1] upper diagonal matrix
         if mask_slice_i is not None:
             mask[mask_slice_i, :] = True
         
         # ------------ Vision ------------
-        if self.use_llm:
-            attention_mask = combine_padding_and_attention_masks(vision_padding_mask, mask)
-            x = vision_emb @ self.text_vision_proj.weight  
-            vision_emb = self.multi_encoder(inputs_embeds=x.to(self.multi_encoder.dtype), attention_mask=attention_mask)["logits"]
-            vision_emb = self.text_vision_proj(vision_emb.to(x.dtype))
-        else:
-            vision_emb = self.multi_encoder(vision_emb, mask=mask, src_key_padding_mask=vision_padding_mask) 
+        if self.use_multiencoder:
+            if self.use_llm:
+                attention_mask = combine_padding_and_attention_masks(vision_padding_mask, mask)
+                x = vision_emb @ self.text_vision_proj.weight  
+                vision_emb = self.multi_encoder(inputs_embeds=x.to(self.multi_encoder.dtype), attention_mask=attention_mask)["logits"]
+                vision_emb = self.text_vision_proj(vision_emb.to(x.dtype))
+            else:
+                vision_emb = self.multi_encoder(vision_emb, mask=mask, src_key_padding_mask=vision_padding_mask) #[B, D+1, E] -> [B, D+1, E]
             # vision_emb = checkpoint(self.multi_encoder, vision_emb.requires_grad_(), mask, vision_padding_mask)
-  
+        else:
+            vision_emb = self.vision_to_latent(vision_emb.mean(dim=1, keepdim=True)) #mean over slices
+            #aggregate slices, ensure class token is returned
 
-        vision_cls = self.cls_logits(vision_emb[:, -1])
+        vision_cls = self.cls_logits(vision_emb[:, -1]) # [B, E] 
         # vision_cls = checkpoint(self.cls_logits, vision_emb[:, -1])
         
         return vision_cls, vision_emb[:, :-1]
@@ -175,14 +187,17 @@ class MedVLM(BasicVLM):
         cls_padding = torch.zeros((B, 1), device=text.device).bool()
     
         # ------------ Get Text Embeddings ------------
-        text_emb = self.text_encoder(text) # [B, L] -> [B, L, E]
+        text_emb = self.text_encoder(text) # [B, L] -> [B, L, E_text]  L=511, E=768 for Bert
+        # text_emb = self.text_encoder(text.input_ids, attention_mask = text.attention_mask) #For BertModel
 
         text_padding_mask = text == self.tokenizer_y.pad_token_id
         self.text_padding_mask = text_padding_mask #masks tells where there are text tokens and where padding tokens
+        #TODO: check if mask should aplly on eos token, because it doesn't
         text_padding_mask = torch.cat([text_padding_mask, cls_padding], dim=1)
         mask = torch.triu(torch.ones(text.size(1)+1, text.size(1)+1, device=text.device), diagonal=1).bool()
 
         if self.use_llm:
+            assert(self.use_multiencoder)
             cls_emb = self.cls_emb.repeat(B, 1, 1) @ self.text_vision_proj.weight 
             text_emb = torch.cat([text_emb, cls_emb ], dim=1)
 
@@ -191,22 +206,26 @@ class MedVLM(BasicVLM):
             text_emb = self.text_vision_proj(text_emb.to(cls_emb.dtype))
             
         else:
-            text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device))
-            text_emb = self.text_vision_proj(text_emb)
-            text_emb = torch.cat([text_emb, self.cls_emb.repeat(B, 1, 1)], dim=1)
-
-            text_emb = self.multi_encoder(text_emb, mask, text_padding_mask)
+            if (self.pos_encoder is not None):
+                text_emb += self.pos_encoder(torch.arange(text.size(1), device=text.device))
+            text_emb = self.text_vision_proj(text_emb) #[B,L, E_text] -> [B, L, E_vision] 
+            text_emb = torch.cat([text_emb, self.cls_emb.repeat(B, 1, 1)], dim=1) # [B, L+1, E_vision] with E_vision=384 for DinoV2
+            if self.use_multiencoder:
+                text_emb = self.multi_encoder(text_emb, mask, text_padding_mask) # [B, L+1, E_vision]
+            #else mean.... maybe mean and layer
+            #TODO: 
             # text_emb = checkpoint(self.multi_encoder, text_emb.requires_grad_(), mask, text_padding_mask)
 
 
         # Text Logits 
-        tgt_cls = self.cls_logits(text_emb[:, -1])
+        tgt_cls = self.cls_logits(text_emb[:, -1]) # [B, E_vision]
         # tgt_cls = checkpoint(self.cls_logits, text_emb[:, -1])
 
         return tgt_cls, text_emb[:, :-1]
     
 
     def forward_vision_text(self, vision_emb, text_emb):
+        assert(self.use_multiencoder)
         x = torch.cat([vision_emb, text_emb], dim=1)
         src_padding_mask = torch.cat([self.slice_padding_mask, self.text_padding_mask], dim=1)
         mask = torch.triu(torch.ones(x.size(1), x.size(1), device=vision_emb.device), diagonal=1).bool()
@@ -229,6 +248,7 @@ class MedVLM(BasicVLM):
     
 
     def forward_text_vision(self, text_emb, vision_emb):
+        assert(self.use_multiencoder)
         B = text_emb.size(0)   
         bos_emb = self.bos_emb.repeat(B, 1, 1)
         cls_padding = torch.zeros((B, 1), device=text_emb.device).bool()
@@ -258,10 +278,10 @@ class MedVLM(BasicVLM):
 
     def forward(self, img, text):    
         # ----------------- Vision -----------------
-        memory_cls, memory = self.forward_vision(img) #memory_cls: [1,384]
+        memory_cls, memory = self.forward_vision(img) #memory_cls: [B,384]
         
         # ----------------- Text -----------------
-        text_cls, text_emb = self.forward_text(text) #text_cls: [1,384]
+        text_cls, text_emb = self.forward_text(text) #text_cls: [B,384]
 
 
         # ----------------- Multi: Image -> Text -----------------  
@@ -274,20 +294,31 @@ class MedVLM(BasicVLM):
              
         return memory_cls, text_cls, text_logits, vision_logits
     
-
-    
-
     def compute_similiarty(self, text, imgs, return_cls=False):
+        """Compute similarity of image and tokenized text."""
         num_img = imgs.size(0) #B Batchsize
-        num_text = text.size(0)
+        num_text = text.size(0) #usually 2 for positive and negative prompt
         
-        # Vision 
-        vision_cls, _ = self.forward_vision(imgs)
+        # Encoding 
+        vision_cls, _ = self.forward_vision(imgs) #  [B_img, C, D, H, W] -> [B, E] # [Batch, 1, 140, 224, 224] -> [B, 384]
+        text_cls, _ = self.forward_text(text) # [B_text, E][2, 1, 384]
+       
+        pred_i2t, pred_t2i = self.compute_similarity_embed(text_cls, vision_cls)
+
+        if return_cls:
+            return pred_i2t, pred_t2i, vision_cls, text_cls
+        return pred_i2t, pred_t2i 
+    
+    def compute_similarity_embed(self, text_cls, vision_cls):
+        """Compute similarity of text and image classification tokens."""
+        num_img = vision_cls.size(0) #B Batchsize
+        num_text = text_cls.size(0) #usually 2 for positive and negative prompt
+
+        #Vision
         vision_cls = F.normalize(vision_cls, dim=-1) # [B, 384]
         vision_cls = vision_cls.repeat_interleave(num_text, dim=0) # [num_text*B, 384]
 
-        # Text
-        text_cls, _ = self.forward_text(text) #[2, 1, 384]
+        #Text
         text_cls = F.normalize(text_cls, dim=-1) #[2, 384]
         text_cls = text_cls.repeat(num_img, 1) # [num_text*B, 384]
 
@@ -297,10 +328,8 @@ class MedVLM(BasicVLM):
         pred_i2t = logits.softmax(dim=-1) #Softmax along row, compared fixed image to different texts
         pred_t2i = logits.softmax(dim=0) #Softmax along column, compare fixed text to different images
 
-        if return_cls:
-            return pred_i2t, pred_t2i, vision_cls, text_cls
         return pred_i2t, pred_t2i 
-    
+
     def compute_similiarty_attention(self, text, imgs):
         ref_pred, _, text_cls = self.compute_similiarty(text, imgs, return_cls=True)
 

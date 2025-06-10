@@ -39,7 +39,6 @@ if __name__ == "__main__":
 
     path_run = Path(args.path_run)
     path_out = path_run.parent/'results_report'
-    # path_out_weight.mkdir(parents=True, exist_ok=True)
     best_gpu_index, max_free_memory = get_gpu_with_max_free_memory()
     device=torch.device(f'cuda:{best_gpu_index}')
 
@@ -76,16 +75,6 @@ if __name__ == "__main__":
         imgs = batch['img'].to(device, non_blocking=True)
         labels = batch['label']
         text = batch['text'].to(device)
-        # # Prepare text prompts
-        # if args.dataset == "UKA":
-        #     text1 = tokenizer(f"Kein {ds_test.LABEL}") # No or Kein [512,]
-        #     text2 = tokenizer(f"{ds_test.LABEL}")
-        # else:
-        #     text1 = tokenizer(f"{ds_test.LABEL} is not present")
-        #     text2 = tokenizer(f"{ds_test.LABEL} is present")
-
-
-        # text = torch.stack([text1, text2])[:, :-1].to(device) # Remove the last token (eos)
 
         with torch.no_grad():
             probs_i2t, probs_t2i = model.compute_similiarty(text, imgs)
